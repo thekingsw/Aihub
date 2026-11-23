@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="vi">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
+<meta name="color-scheme" content="light">
+<title>AI Hub · Hộp thư</title>
+<style>
+*{box-sizing:border-box}html{color-scheme:light;font:16px/1.5 system-ui,"Segoe UI",sans-serif;background:#f5f7fb;color:#172033}body{margin:0}button,input,select,textarea{font:inherit}a,button,select{min-height:44px}button,a,select,textarea{touch-action:manipulation}:focus-visible{outline:3px solid #93b4f6;outline-offset:3px}.shell{max-width:1100px;margin:auto;height:100dvh;display:flex;flex-direction:column;padding:0 20px}header{display:flex;align-items:center;gap:16px;padding:16px 0;flex-shrink:0}.tinker-return{display:inline-flex;align-items:center;text-decoration:none;color:#2563eb;background:white;border:1px solid #d9e1ef;border-radius:12px;padding:8px 14px;white-space:nowrap}h1{font-size:22px;margin:0;letter-spacing:-.03em}.subtitle{font-size:13px;color:#526077;margin:3px 0}.intro{min-width:0;flex:1}.legend{font-size:12px;color:#526077;display:flex;gap:14px;flex-wrap:wrap;padding-bottom:14px}.legend span::before{content:'';display:inline-block;width:8px;height:8px;border-radius:50%;background:var(--person);margin-right:6px}.anh{--person:#2563eb;--bubble:#eff5ff}.tinker{--person:#7c3aed;--bubble:#f5efff}.emi{--person:#16815d;--bubble:#edf9f3}#feed{flex:1;min-height:80px;overflow-y:auto;overscroll-behavior:contain;background:#fff;border:1px solid #dfe6f0;border-radius:20px 20px 0 0;padding:24px;scrollbar-gutter:stable}.message{background:var(--bubble);border-left:3px solid var(--person);padding:14px 18px;border-radius:4px 14px 14px 4px;margin:0 0 16px;max-width:92%;overflow-wrap:anywhere}.message.anh{margin-left:auto}.meta{display:flex;gap:8px;align-items:center;flex-wrap:wrap;font-size:12px;color:#526077}.sender{color:var(--person);font-size:14px}.recipient{background:#fff9;border-radius:6px;padding:2px 7px;font-weight:600;color:#354157}.meta time{margin-left:auto;font-size:11px}.body{white-space:normal;margin:10px 0 0}.reference{white-space:pre-wrap;overflow-wrap:anywhere;font-size:12px;color:#526077;margin-top:10px}.empty{text-align:center;padding:48px 12px;color:#526077}.empty strong{display:block;color:#172033;font-size:20px;margin-bottom:8px}#composer{background:#fff;border:1px solid #dfe6f0;border-top:0;border-radius:0 0 20px 20px;padding:16px 20px max(16px,env(safe-area-inset-bottom));flex-shrink:0;margin-bottom:16px}.compose-top{display:flex;gap:12px;align-items:center;flex-wrap:wrap;margin-bottom:10px}label{font-size:13px;font-weight:600}select{border:1px solid #d9e1ef;border-radius:10px;background:#f8fafc;padding:8px 12px;color:#172033;max-width:100%}.compose-body{display:flex;gap:12px;align-items:flex-end}textarea{resize:vertical;min-height:70px;max-height:160px;flex:1;width:0;border:1px solid #d9e1ef;border-radius:12px;padding:12px;color:#172033;background:#f8fafc;font-size:16px}button{border:0;background:#2563eb;color:#fff;font-weight:600;padding:12px 20px;border-radius:12px;cursor:pointer}button:disabled{opacity:.5;cursor:default}#status{font-size:12px;color:#526077;margin-left:auto}#error{color:#b91c1c;font-size:13px;margin:8px 0 0}#new-messages{background:#edf3ff;color:#2563eb;align-self:center;padding:4px 14px;font-size:12px;min-height:36px;margin:4px}footer{font-size:11px;color:#64748b;margin-top:8px} [hidden]{display:none!important}
+@media(max-width:600px){.shell{padding:0 12px}header{gap:10px;padding:12px 0}h1{font-size:18px}.subtitle{font-size:12px}.tinker-return{padding:8px 10px;font-size:13px}.legend{gap:10px;font-size:11px}#feed{padding:14px}.message{max-width:100%;padding:12px}.meta time{width:100%;margin:0}#composer{padding:12px;margin-bottom:0;border-radius:0;padding-bottom:max(12px,env(safe-area-inset-bottom))}textarea{min-height:64px}.compose-body{gap:8px}button{padding:12px 16px}footer{display:none}}
+@media(max-height:500px){header{padding:6px 0}.subtitle,.legend{display:none}#composer{padding:8px;margin-bottom:0}textarea{min-height:44px;max-height:80px}.compose-top{margin-bottom:4px}}
+.room-reply,#reply-cancel{background:transparent;color:#254080;padding:0 8px;font-size:12px}#reply-label{font-size:13px;overflow-wrap:anywhere}
+.body pre{white-space:pre-wrap;background:#172033;color:#f5f7fb;padding:12px;border-radius:8px;overflow:auto}.body code{font-family:monospace}.body table{border-collapse:collapse;display:block;overflow:auto}.body th,.body td{border:1px solid #bbc5d3;padding:6px 10px}.body h1,.body h2,.body h3{margin:12px 0 6px}.body p{margin:6px 0}</style>
+</head>
+<body>
+<div class="shell">
+<header><a id="tinker-return" class="tinker-return" href="https://ubuntudev.tail8afec3.ts.net/#/dashboard">← Tinker</a><div class="intro"><h1>Phòng chung AI Hub</h1><p class="subtitle">Giao việc và trao đổi cùng Tinker, Emi.</p></div></header>
+<div class="legend" aria-label="Người gửi"><span class="anh">Anh</span><span class="tinker">Tinker</span><span class="emi">Emi</span><span>Gọi @emi hoặc @tinker để giao việc trực tiếp.</span></div>
+<main id="feed" aria-label="Danh sách tin nhắn"><div class="empty"><strong>Chưa có tin nhắn</strong>Anh có thể đăng tin để bắt đầu trao đổi.</div></main>
+<button id="new-messages" hidden type="button">Xem tin mới ↓</button>
+<form id="composer">
+<div class="compose-top"><span id="reply-label" hidden></span><button id="reply-cancel" type="button" hidden>Bỏ trả lời</button><span id="status" role="status">Đang kết nối…</span></div>
+<div class="compose-body"><textarea id="body" required maxlength="20000" placeholder="Anh muốn giao việc hoặc nhắn gì?" aria-label="Nội dung tin nhắn"></textarea><button id="send" type="submit">Gửi</button></div>
+<p id="error" role="alert" hidden></p><footer>Tự cập nhật mỗi 5 giây.</footer>
+</form>
+</div>
+<script>
+'use strict';
+const prefix=location.pathname.startsWith('/apps/ai-hub')?'/apps/ai-hub':'';
+if(prefix)document.getElementById('tinker-return').href='/#/dashboard';
+const feed=document.getElementById('feed'),form=document.getElementById('composer'),body=document.getElementById('body'),send=document.getElementById('send'),status=document.getElementById('status'),error=document.getElementById('error'),newMessages=document.getElementById('new-messages');
+const names={anh:'Anh',tinker:'Tinker',emi:'Emi',all:'Cả hai'};
+let cursor='',loading=false,replyTo='';
+const replyLabel=document.getElementById('reply-label');
+const replyCancel=document.getElementById('reply-cancel');
+function selectReply(message){
+  replyTo=message?.id||'';
+  replyLabel.hidden=replyCancel.hidden=!replyTo;
+  replyLabel.textContent=replyTo?'Trả lời '+(names[message.from]||message.from)+': '+message.body.slice(0,80):'';
+  if(replyTo)body.focus();
+}
+replyCancel.addEventListener('click',()=>selectReply(null));
+const seen=new Set();
+async function api(path,options={}){const response=await fetch(prefix+path,{...options,credentials:'same-origin',headers:{'Content-Type':'application/json','X-Mailbox-Request':'1',...options.headers}});let data;try{data=await response.json();}catch{throw Error('Phản hồi máy chủ không hợp lệ.');}if(!response.ok||!data.ok){if(response.status===401)throw Error('Phiên đã hết hạn. Anh về Tinker để đăng nhập lại nhé.');throw Error(typeof data.error==='string'?data.error:'Không hoàn tất được yêu cầu.');}return data;}
+function element(tag,cls,text){const node=document.createElement(tag);node.className=cls;if(text!==undefined)node.textContent=text;return node;}
+// Self-contained Markdown subset. All source is escaped before generated markup.
+function markdown(source){
+  const escape=s=>s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+  function inline(s){
+    const codes=[];
+    s=escape(s).replace(/`([^`]+)`/g,(_,c)=>'\u0000'+(codes.push('<code>'+c+'</code>')-1)+'\u0000');
+    return s.replace(/\*\*([^*]+)\*\*/g,'<strong>$1</strong>').replace(/\*([^*]+)\*/g,'<em>$1</em>').replace(/_([^_]+)_/g,'<em>$1</em>').replace(/\u0000(\d+)\u0000/g,(_,i)=>codes[+i]);
+  }
+  const lines=String(source).replace(/\r/g,'').split('\n'), out=[];
+  const cells=l=>l.trim().replace(/^\||\|$/g,'').split('|').map(c=>inline(c.trim()));
+  for(let i=0;i<lines.length;i++){
+    let line=lines[i];
+    if(/^```/.test(line)){
+      const code=[];while(++i<lines.length&&!/^```/.test(lines[i]))code.push(lines[i]);
+      out.push('<pre><code>'+escape(code.join('\n'))+'</code></pre>');continue;
+    }
+    if(!line.trim())continue;
+    const heading=/^(#{1,6})\s+(.+)$/.exec(line);
+    if(heading){out.push('<h'+heading[1].length+'>'+inline(heading[2])+'</h'+heading[1].length+'>');continue;}
+    if(line.includes('|')&&i+1<lines.length&&/^\s*\|?\s*:?-{3,}/.test(lines[i+1])){
+      out.push('<table><thead><tr>'+cells(line).map(c=>'<th>'+c+'</th>').join('')+'</tr></thead><tbody>');i++;
+      while(i+1<lines.length&&lines[i+1].includes('|'))out.push('<tr>'+cells(lines[++i]).map(c=>'<td>'+c+'</td>').join('')+'</tr>');
+      out.push('</tbody></table>');continue;
+    }
+    const list=/^\s*(?:[-+*]|\d+\.)\s+/.exec(line);
+    if(list){
+      const ordered=/\d+\./.test(list[0]),tag=ordered?'ol':'ul';out.push('<'+tag+'>');
+      do{out.push('<li>'+inline(lines[i].replace(/^\s*(?:[-+*]|\d+\.)\s+/,''))+'</li>');i++;}
+      while(i<lines.length&&(ordered?/^\s*\d+\.\s+/:/^\s*[-+*]\s+/).test(lines[i]));
+      i--;out.push('</'+tag+'>');continue;
+    }
+    out.push('<p>'+inline(line)+'</p>');
+  }
+  return out.join('');
+}
+function append(messages,force=false){const nearBottom=feed.scrollHeight-feed.scrollTop-feed.clientHeight<100;let changed=false;for(const msg of messages){if(seen.has(msg.id))continue;seen.add(msg.id);feed.querySelector('.empty')?.remove();const item=element('article','message '+(['anh','tinker','emi'].includes(msg.from)?msg.from:'emi'));item.dataset.id=msg.id;const meta=element('div','meta');const stamp=element('time','',new Date(msg.created_at).toLocaleString('vi-VN'));stamp.dateTime=msg.created_at;meta.append(element('strong','sender',names[msg.from]||msg.from),stamp);const replyButton=element('button','room-reply','Trả lời');replyButton.type='button';
+replyButton.addEventListener('click',()=>selectReply(msg));meta.append(replyButton);
+item.append(meta);
+if(msg.reply_to){
+  const quote=element('button','room-reply','Đến tin gốc');quote.type='button';
+  quote.addEventListener('click',()=>{
+    const original=document.getElementById('message-'+msg.reply_to);
+    if(original){original.scrollIntoView({block:'center'});original.focus({preventScroll:true});}
+  });
+  item.append(quote);
+}
+item.id='message-'+msg.id;item.tabIndex=-1;
+const rendered=element('div','body');rendered.innerHTML=markdown(msg.body);item.append(rendered);if(msg.ref)item.append(element('div','reference','Tài liệu: '+msg.ref));feed.append(item);changed=true;}if(changed){if(nearBottom||force){feed.scrollTop=feed.scrollHeight;newMessages.hidden=true;}else newMessages.hidden=false;}}
+async function refresh(){if(loading)return;loading=true;try{const data=await api('/api/messages'+(cursor?'?since='+encodeURIComponent(cursor):''));append(data.messages);if(data.messages.length)cursor=data.messages[data.messages.length-1].id;status.textContent='Đã cập nhật '+new Date().toLocaleTimeString('vi-VN',{hour:'2-digit',minute:'2-digit'});}catch(e){status.textContent='Chưa cập nhật';error.textContent=e.message;error.hidden=false;}finally{loading=false;}}
+form.addEventListener('submit',async event=>{event.preventDefault();if(!body.value.trim()){form.reportValidity();return;}send.disabled=true;error.hidden=true;const original=body.value,quoted=replyTo;try{const data=await api('/api/message',{method:'POST',body:JSON.stringify({body:original,...(quoted?{reply_to:quoted}:{})})});append([data.message],true);if(body.value===original)body.value='';if(quoted===replyTo)selectReply(null);void refresh();}catch(e){error.textContent=e.message;error.hidden=false;}finally{send.disabled=false;}});
+newMessages.addEventListener('click',()=>{feed.scrollTop=feed.scrollHeight;newMessages.hidden=true;});
+// Adjust the available height when a mobile browser overlays the keyboard.
+function fitViewport(){if(window.visualViewport)document.querySelector('.shell').style.height=window.visualViewport.height+'px';}
+window.visualViewport?.addEventListener('resize',fitViewport);fitViewport();
+const timer=setInterval(()=>{if(!document.hidden)void refresh();},5000);document.addEventListener('visibilitychange',()=>{if(!document.hidden)void refresh();});window.addEventListener('pagehide',()=>clearInterval(timer),{once:true});void refresh();
+</script>
+</body></html>
