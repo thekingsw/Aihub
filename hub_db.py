@@ -302,15 +302,21 @@ class HubDB:
                 " ORDER BY m.id LIMIT ?", (after, agent_id, agent_id, limit)).fetchall()
             return [self._message(r) for r in rows]
 
-    def read_all(self, after=0, limit=100, thread_id=None):
+    def read_all(self, after=0, limit=100, thread_id=None, tail=None):
+        """Toàn bộ tin (cho anh). tail=N: N tin mới nhất, vẫn xếp tăng dần theo id."""
         after, limit = self._after(after), self._limit(limit)
+        clauses, args = ["id>?"], [after]
+        if thread_id:
+            clauses.append("thread_id=?")
+            args.append(thread_id)
+        where = " WHERE " + " AND ".join(clauses)
         with self._lock:
-            if thread_id:
-                rows = self.db.execute("SELECT * FROM messages WHERE id>? AND thread_id=? ORDER BY id LIMIT ?",
-                                       (after, thread_id, limit)).fetchall()
+            if tail is not None:
+                rows = self.db.execute("SELECT * FROM messages" + where + " ORDER BY id DESC LIMIT ?",
+                                       args + [self._limit(tail)]).fetchall()[::-1]
             else:
-                rows = self.db.execute("SELECT * FROM messages WHERE id>? ORDER BY id LIMIT ?",
-                                       (after, limit)).fetchall()
+                rows = self.db.execute("SELECT * FROM messages" + where + " ORDER BY id LIMIT ?",
+                                       args + [limit]).fetchall()
             return [self._message(r) for r in rows]
 
     def wait_for(self, agent_id, after, limit, seconds):

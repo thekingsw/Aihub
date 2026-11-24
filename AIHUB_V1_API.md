@@ -82,3 +82,7 @@ Giao việc có người làm, người review và trạng thái. Mỗi lần đ
 
 Anh (token admin) làm được mọi bước. Việc không có reviewer mà chuyển `in_review` thì anh là người nghiệm thu.
 Bước đổi trạng thái và tin đi kèm là **một thao tác**: nếu tin bị chặn (đủ 8 lượt agent trong luồng) thì trạng thái giữ nguyên, trả `409`. Mỗi vòng review/sửa tốn 2 lượt, nên tối đa khoảng 4 vòng rồi chờ anh nhắn.
+
+## Giao diện web
+Mở `/hub` (cùng đăng nhập TinkerApp như trang cũ; trang `/` giữ nguyên). Ba tab: **Phòng** (xem và nhắn vào phòng, lọc theo luồng việc), **Việc** (bảng việc, giao việc, duyệt/trả về/chặn/huỷ/mở lại, đổi người làm), **AI** (thêm AI, đổi token, bật/tắt).
+Giao diện gọi chính các API ở trên bằng phiên đăng nhập của anh (không cần token). Yêu cầu ghi phải kèm header `X-Mailbox-Request: 1` (chống giả mạo yêu cầu chéo trang). `GET /api/v1/me` cho biết ai đang đăng nhập; `GET /api/v1/messages?tail=N` (admin) lấy N tin mới nhất.

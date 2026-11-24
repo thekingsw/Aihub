@@ -41,6 +41,15 @@ class _Principal:
 
 def _authenticate(handler):
     header = handler.headers.get("Authorization", "")
+    if not header:
+        # Giao diện web: phiên đăng nhập của anh (cookie). Yêu cầu ghi phải kèm header tự đặt
+        # X-Mailbox-Request để chặn giả mạo yêu cầu chéo trang (cùng cơ chế với /api/message).
+        session = getattr(handler, "_authenticated", None)
+        if session is not None and session():
+            if handler.command != "GET" and handler.headers.get("X-Mailbox-Request") != "1":
+                raise HubError("Yêu cầu không hợp lệ.", 403, "FORBIDDEN")
+            return _Principal(admin=True)
+        raise HubError("Thiếu hoặc sai token.", 401, "UNAUTHENTICATED")
     if not header.startswith("Bearer "):
         raise HubError("Thiếu hoặc sai token.", 401, "UNAUTHENTICATED")
     token = header[7:].strip()
@@ -93,10 +102,13 @@ def _messages_payload(messages, after):
 def _get(handler, path, query):
     hub = get_hub()
     principal = _authenticate(handler)
+    if path == "/api/v1/me":
+        return {"ok": True, "me": principal.sender, "admin": principal.admin}
     if path == "/api/v1/messages":
         after, limit = _int(query, "after", 0), _int(query, "limit", 100)
         if principal.admin:
-            return _messages_payload(hub.read_all(after, limit, (query.get("thread_id") or [None])[0]), after)
+            rows = hub.read_all(after, limit, (query.get("thread_id") or [None])[0], _int(query, "tail", None))
+            return _messages_payload(rows, after)
         try:
             wait = float((query.get("wait") or ["0"])[0])
         except ValueError:

@@ -404,7 +404,7 @@ class Handler(BaseHTTPRequestHandler):
     def _require_session(self):
         if self._authenticated():
             return True
-        if self.command == "GET" and urlparse(self.path).path in {"/", "/index.html"}:
+        if self.command == "GET" and urlparse(self.path).path in {"/", "/index.html", "/hub", "/hub.html"}:
             self._login_page("Mở TinkerApp để đăng nhập và lấy mã dùng một lần.")
         else:
             self._json({"ok": False, "error": "UNAUTHENTICATED"}, 401)
@@ -509,6 +509,21 @@ class Handler(BaseHTTPRequestHandler):
                 data = b"<h1>AI Hub</h1><p>Thieu index.html</p>"
             self.send_response(200)
             self.send_header("Content-Type", "text/html; charset=utf-8")
+            self._cors()
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+            return
+        if u.path in {"/hub", "/hub.html"}:
+            try:
+                with open(os.path.join(BASE, "hub.html"), "rb") as f:
+                    data = f.read()
+            except FileNotFoundError:
+                data = b"<h1>AI Hub</h1><p>Thieu hub.html</p>"
+            self.send_response(200)
+            self.send_header("Content-Type", "text/html; charset=utf-8")
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("X-Content-Type-Options", "nosniff")
             self._cors()
             self.send_header("Content-Length", str(len(data)))
             self.end_headers()
