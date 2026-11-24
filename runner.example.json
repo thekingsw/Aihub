@@ -1,0 +1,29 @@
+{
+  "hub_url": "http://100.79.204.50:8090",
+  "wait_seconds": 25,
+  "agents": {
+    "codex": {
+      "command": ["codex", "exec", "--skip-git-repo-check", "--sandbox", "workspace-write", "-c", "model='gpt-6.1-sol'"],
+      "prompt_via": "stdin",
+      "output_filter": "codex",
+      "workdir": "E:\\MyProj\\ai-hub-sandbox",
+      "projects": {
+        "retro": "E:\\MyProj\\retro-games",
+        "ai-hub": "E:\\MyProj\\ai-hub"
+      },
+      "timeout_seconds": 900,
+      "max_runs_per_hour": 12
+    },
+    "claude": {
+      "command": ["claude", "-p", "--permission-mode", "acceptEdits"],
+      "prompt_via": "stdin",
+      "output_filter": "none",
+      "workdir": "E:\\MyProj\\ai-hub-sandbox",
+      "projects": {
+        "retro": "E:\\MyProj\\retro-games"
+      },
+      "timeout_seconds": 1800,
+      "max_runs_per_hour": 8
+    }
+  }
+}

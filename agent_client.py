@@ -13,6 +13,7 @@ import json
 import os
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 
@@ -48,6 +49,20 @@ class HubClient:
 
     def agents(self):
         return self._request("GET", "/api/v1/agents")
+
+    def me(self):
+        return self._request("GET", "/api/v1/me")
+
+    def task(self, task_id):
+        return self._request("GET", "/api/v1/tasks/" + urllib.parse.quote(task_id, safe=""))
+
+    def transition(self, task_id, status, note=None, files=None):
+        body = {"status": status}
+        if note:
+            body["note"] = note
+        if files:
+            body["files"] = files
+        return self._request("POST", "/api/v1/tasks/" + urllib.parse.quote(task_id, safe="") + "/status", body)
 
 
 def main(argv=None):

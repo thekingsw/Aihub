@@ -13,7 +13,7 @@ import time
 from datetime import datetime, timezone
 
 HUMANS = frozenset({"anh"})
-KINDS = frozenset({"task", "message", "result", "review", "ack", "handoff"})
+KINDS = frozenset({"task", "message", "result", "review", "ack", "handoff", "notice"})
 MODES = frozenset({"push", "pull"})
 RESERVED_IDS = frozenset({"all", "anh", "system", "admin"})
 MAX_BODY = 20000

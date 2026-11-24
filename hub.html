@@ -133,7 +133,7 @@ const prefix = location.pathname.startsWith('/apps/ai-hub') ? '/apps/ai-hub' : '
 const $ = (sel) => document.querySelector(sel);
 const S = {agents: [], tasks: [], messages: [], lastId: 0, thread: null, tab: 'room', unseen: 0, authed: true};
 const STATUS = {todo: 'Chờ làm', in_progress: 'Đang làm', in_review: 'Chờ review', blocked: 'Bị chặn', done: 'Xong', cancelled: 'Đã huỷ'};
-const KIND = {task: 'Giao việc', handoff: 'Nộp review', review: 'Review', result: 'Báo cáo', ack: 'Đã nhận'};
+const KIND = {task: 'Giao việc', handoff: 'Nộp review', review: 'Review', result: 'Báo cáo', ack: 'Đã nhận', notice: 'Thông báo'};
 const PALETTE = ['#7c3aed', '#16815d', '#c2410c', '#0e7490', '#be185d', '#4d7c0f', '#a16207', '#4338ca'];
 // nút hành động theo trạng thái: [trạng thái đích, nhãn, cần ghi chú?]
 const ACTIONS = {

@@ -20,3 +20,7 @@ start.bat
 *.tmp-*
 hub.sqlite3
 hub.sqlite3-*
+runs/
+runner-state/
+runner.json
+agent-runner.*.log
