@@ -24,6 +24,7 @@ from html import escape
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from datetime import datetime, timezone
 from mailbox_store import MessageStore, RoomConflict
+import api_v1
 
 BASE = os.path.dirname(os.path.abspath(__file__))
 CONFIG_PATH = os.path.join(BASE, "config.json")
@@ -472,6 +473,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         u = urlparse(self.path)
+        if u.path.startswith("/api/v1/"):
+            api_v1.dispatch(self, "GET")
+            return
         query = parse_qs(u.query, keep_blank_values=True)
         if "sso_code" in query:
             self._receive_sso(query["sso_code"])
@@ -526,6 +530,9 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_POST(self):
         path = urlparse(self.path).path
+        if path.startswith("/api/v1/"):
+            api_v1.dispatch(self, "POST")
+            return
         if path == "/internal/rotate-codex-key":
             if not self._require_internal():
                 return

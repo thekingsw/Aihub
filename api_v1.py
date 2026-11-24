@@ -1,0 +1,161 @@
+"""AI Hub API v1 — mỗi AI một token riêng, tin có id tăng dần.
+
+Cắm vào ai_hub.Handler: mọi đường dẫn /api/v1/... được chuyển cho dispatch().
+Xác thực: Authorization: Bearer <token agent> hoặc AI_HUB_INTERNAL_TOKEN (quyền admin, gửi với tư cách anh).
+"""
+import json
+import os
+import re
+import secrets
+import threading
+from urllib.parse import parse_qs, urlparse
+
+import hub_db
+from hub_db import HubError, Forbidden, NotFound
+
+BASE = os.path.dirname(os.path.abspath(__file__))
+MAX_REQUEST = 256 * 1024
+MAX_WAIT = 25.0
+_hub = None
+_hub_lock = threading.Lock()
+
+
+def get_hub():
+    global _hub
+    with _hub_lock:
+        if _hub is None:
+            _hub = hub_db.HubDB(os.environ.get("AI_HUB_DB", os.path.join(BASE, "hub.sqlite3")))
+        return _hub
+
+
+class _Principal:
+    def __init__(self, admin=False, agent=None):
+        self.admin = admin
+        self.agent = agent
+
+    @property
+    def sender(self):
+        return "anh" if self.admin else self.agent["id"]
+
+
+def _authenticate(handler):
+    header = handler.headers.get("Authorization", "")
+    if not header.startswith("Bearer "):
+        raise HubError("Thiếu hoặc sai token.", 401, "UNAUTHENTICATED")
+    token = header[7:].strip()
+    expected = os.environ.get("AI_HUB_INTERNAL_TOKEN", "")
+    if expected and secrets.compare_digest(token, expected):
+        return _Principal(admin=True)
+    agent = get_hub().authenticate(token)
+    if agent is None:
+        raise HubError("Thiếu hoặc sai token.", 401, "UNAUTHENTICATED")
+    return _Principal(agent=agent)
+
+
+def _require_admin(principal):
+    if not principal.admin:
+        raise Forbidden("Chỉ admin mới được làm việc này.")
+
+
+def _read_json(handler):
+    if handler.headers.get("Content-Type", "").split(";", 1)[0].strip() != "application/json":
+        raise HubError("Content-Type phải là application/json.", 415, "UNSUPPORTED_MEDIA_TYPE")
+    try:
+        length = int(handler.headers.get("Content-Length", "0"))
+    except ValueError:
+        raise HubError("Content-Length không hợp lệ.") from None
+    if not 0 < length <= MAX_REQUEST:
+        raise HubError("Nội dung yêu cầu rỗng hoặc quá lớn.", 413, "PAYLOAD_TOO_LARGE")
+    try:
+        data = json.loads(handler.rfile.read(length).decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise HubError("JSON không hợp lệ.") from None
+    if not isinstance(data, dict):
+        raise HubError("Nội dung phải là một object JSON.")
+    return data
+
+
+def _int(query, name, default):
+    values = query.get(name)
+    if not values:
+        return default
+    try:
+        return int(values[0])
+    except ValueError:
+        raise HubError("%s phải là số nguyên." % name) from None
+
+
+def _messages_payload(messages, after):
+    return {"ok": True, "messages": messages, "last_id": messages[-1]["id"] if messages else after}
+
+
+def _get(handler, path, query):
+    hub = get_hub()
+    principal = _authenticate(handler)
+    if path == "/api/v1/messages":
+        after, limit = _int(query, "after", 0), _int(query, "limit", 100)
+        if principal.admin:
+            return _messages_payload(hub.read_all(after, limit, (query.get("thread_id") or [None])[0]), after)
+        try:
+            wait = float((query.get("wait") or ["0"])[0])
+        except ValueError:
+            raise HubError("wait phải là số giây.") from None
+        wait = min(max(wait, 0.0), MAX_WAIT)
+        agent_id = principal.agent["id"]
+        rows = hub.wait_for(agent_id, after, limit, wait) if wait else hub.read_for(agent_id, after, limit)
+        return _messages_payload(rows, after)
+    if path == "/api/v1/agents":
+        return {"ok": True, "agents": hub.list_agents()}
+    raise NotFound("Không có đường dẫn này.")
+
+
+def _post(handler, path):
+    hub = get_hub()
+    principal = _authenticate(handler)
+    if path == "/api/v1/messages":
+        data = _read_json(handler)
+        claimed = data.pop("from", None)
+        if claimed is not None and claimed != principal.sender:
+            raise Forbidden("Trường from không khớp với token.")
+        fields = {k: data.get(k) for k in ("to", "kind", "task_id", "project", "title", "reply_to",
+                                           "thread_id", "request_id", "files")}
+        fields = {k: v for k, v in fields.items() if v is not None}
+        message = hub.post(principal.sender, data.get("body"), **fields)
+        return {"ok": True, "message": message}, (200 if message.get("duplicate") else 201)
+    _require_admin(principal)
+    if path == "/api/v1/agents":
+        data = _read_json(handler)
+        agent, token = hub.register_agent(data.get("id"), data.get("name"), data.get("mode"),
+                                          data.get("role", ""), data.get("poll_interval", 300))
+        return {"ok": True, "agent": agent, "token": token,
+                "note": "Token chỉ hiện một lần; hãy lưu ngay."}, 201
+    match = re.fullmatch(r"/api/v1/agents/([a-z][a-z0-9_-]{1,31})/(rotate|enable|disable)", path)
+    if match:
+        agent_id, action = match.groups()
+        if action == "rotate":
+            return {"ok": True, "token": hub.rotate_token(agent_id),
+                    "note": "Token cũ đã vô hiệu; token mới chỉ hiện một lần."}
+        hub.set_enabled(agent_id, action == "enable")
+        return {"ok": True}
+    raise NotFound("Không có đường dẫn này.")
+
+
+def dispatch(handler, method):
+    path = urlparse(handler.path)
+    query = parse_qs(path.query, keep_blank_values=True)
+    try:
+        if method == "GET":
+            result = _get(handler, path.path.rstrip("/"), query)
+        elif method == "POST":
+            result = _post(handler, path.path.rstrip("/"))
+        else:
+            raise HubError("Phương thức không được hỗ trợ.", 405, "METHOD_NOT_ALLOWED")
+        status = 200
+        if isinstance(result, tuple):
+            result, status = result
+        handler._json(result, status)
+    except HubError as exc:
+        handler._json({"ok": False, "error": exc.code, "message": str(exc)}, exc.status)
+    except Exception as exc:  # noqa: BLE001 - không để lỗi lạ làm đứt kết nối
+        print("api_v1 loi: %r" % (exc,), flush=True)
+        handler._json({"ok": False, "error": "INTERNAL", "message": "Lỗi máy chủ."}, 500)

@@ -18,3 +18,5 @@ start.bat
 *_tmp.ps1
 *_tmp.py
 *.tmp-*
+hub.sqlite3
+hub.sqlite3-*
