@@ -11,6 +11,7 @@ import threading
 from urllib.parse import parse_qs, urlparse
 
 import hub_db
+import hub_tasks
 from hub_db import HubError, Forbidden, NotFound
 
 BASE = os.path.dirname(os.path.abspath(__file__))
@@ -106,6 +107,14 @@ def _get(handler, path, query):
         return _messages_payload(rows, after)
     if path == "/api/v1/agents":
         return {"ok": True, "agents": hub.list_agents()}
+    board = hub_tasks.board_for(hub)
+    if path == "/api/v1/tasks":
+        first = lambda name: (query.get(name) or [None])[0]  # noqa: E731
+        return {"ok": True, "tasks": board.list(first("status"), first("assignee"), first("project"),
+                                                _int(query, "limit", 100))}
+    match = re.fullmatch(r"/api/v1/tasks/([A-Za-z0-9][A-Za-z0-9_-]{0,39})", path)
+    if match:
+        return {"ok": True, "task": board.get(match.group(1))}
     raise NotFound("Không có đường dẫn này.")
 
 
@@ -122,6 +131,22 @@ def _post(handler, path):
         fields = {k: v for k, v in fields.items() if v is not None}
         message = hub.post(principal.sender, data.get("body"), **fields)
         return {"ok": True, "message": message}, (200 if message.get("duplicate") else 201)
+    board = hub_tasks.board_for(hub)
+    if path == "/api/v1/tasks":
+        data = _read_json(handler)
+        task = board.create(principal.sender, data.get("title"), data.get("assignee"), data.get("description", ""),
+                            data.get("project"), data.get("reviewer"), data.get("id"))
+        return {"ok": True, "task": task}, 201
+    match = re.fullmatch(r"/api/v1/tasks/([A-Za-z0-9][A-Za-z0-9_-]{0,39})/(status|assign)", path)
+    if match:
+        task_id, action = match.groups()
+        data = _read_json(handler)
+        if action == "status":
+            return {"ok": True, "task": board.transition(principal.sender, task_id, data.get("status"),
+                                                          data.get("note"), data.get("files"))}
+        _require_admin(principal)
+        return {"ok": True, "task": board.reassign(task_id, data.get("assignee"), data.get("reviewer"),
+                                                   bool(data.get("clear_reviewer")))}
     _require_admin(principal)
     if path == "/api/v1/agents":
         data = _read_json(handler)
