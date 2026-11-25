@@ -79,6 +79,24 @@ dialog::backdrop{background:#0008}
 .warn{color:var(--warn);font-size:13px}
 .attach{display:inline-flex;gap:6px;flex-wrap:wrap;align-items:center}
 .attach .chip button{background:none;border:0;min-height:20px;padding:0 2px;color:var(--mute)}
+.md{overflow-wrap:anywhere;line-height:1.55}
+.md>*:first-child{margin-top:0}.md>*:last-child{margin-bottom:0}
+.md p,.md ul,.md ol,.md pre,.md blockquote,.md .tablewrap{margin:.5em 0}
+.md h1,.md h2,.md h3,.md h4,.md h5,.md h6{margin:.8em 0 .35em;line-height:1.25}
+.md h1{font-size:1.3em}.md h2{font-size:1.18em}.md h3{font-size:1.08em}.md h4,.md h5,.md h6{font-size:1em}
+.md ul,.md ol{padding-left:1.5em}
+.md code{font-family:ui-monospace,Consolas,monospace;font-size:.9em;background:var(--card);border:1px solid var(--line);border-radius:5px;padding:0 4px}
+.md pre{background:var(--card);border:1px solid var(--line);border-radius:10px;padding:10px 12px;overflow-x:auto;white-space:pre}
+.md pre code{background:none;border:0;padding:0;font-size:.85em}
+.md blockquote{border-left:3px solid var(--line);margin-left:0;padding:0 0 0 12px;color:var(--mute)}
+.md hr{border:0;border-top:1px solid var(--line);margin:.8em 0}
+.md .tablewrap{overflow-x:auto}
+.md table{border-collapse:collapse;font-size:.92em}
+.md th,.md td{border:1px solid var(--line);padding:4px 10px;text-align:left;vertical-align:top}
+.md th{background:var(--card)}
+.md a{color:var(--accent)}
+.md-tools{display:flex;gap:8px;align-items:center;flex-wrap:wrap}
+pre.plain{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--chip);border-radius:10px;padding:10px 12px;margin:0;font-size:13px}
 .thumb{display:block;max-width:100%;max-height:220px;border-radius:8px;border:1px solid var(--line);margin-top:6px}
 input[type=file]{display:none}
 .derr{color:var(--bad);font-size:13px;margin:0}.derr:empty{display:none}
@@ -246,6 +264,170 @@ function attachWidget(onError) {
     busy: () => button.disabled, reset: () => { picked.length = 0; render(); }};
 }
 
+/* ----------------------------------------------------------------- Markdown an toàn
+   Bộ con của Markdown, dựng bằng DOM (createElement/textContent), không dùng innerHTML nên HTML thô trong
+   tin chỉ hiện như chữ. Liên kết chỉ nhận http(s) và tệp của hub; không hiển thị ảnh từ xa. */
+const MD_LIST = /^(\s*)([-+*]|\d{1,9}[.)])\s+(.*)$/;
+const MD_FENCE = /^\s{0,3}(`{3,}|~{3,})\s*[\w+#.-]*\s*$/;
+const MD_HR = /^\s{0,3}([-*_])(?:\s*\1){2,}\s*$/;
+const MD_HEADING = /^\s{0,3}(#{1,6})\s+(.*?)\s*#*\s*$/;
+const MD_QUOTE = /^\s{0,3}>\s?(.*)$/;
+const MD_TABLE_SEP = /^\s*\|?\s*:?-{2,}:?\s*(\|\s*:?-{2,}:?\s*)*\|?\s*$/;
+const MD_INLINE = /(`+)([\s\S]*?[^`])\1(?!`)|\[([^\]\n]+)\]\(([^)\s]+)\)|(https?:\/\/[^\s<>]*[^\s<>.,;:!?)\]'"])|\*\*(?=\S)([\s\S]*?\S)\*\*|__(?=\S)([\s\S]*?\S)__|~~(?=\S)([\s\S]*?\S)~~|\*(?=[^\s*])([\s\S]*?[^\s*])\*|_(?=[^\s_])([\s\S]*?[^\s_])_/g;
+
+function mdHref(url) {
+  if (/^https?:\/\/[^\s]+$/i.test(url)) return url;
+  if (/^\/api\/v1\/files\/[0-9a-f]{32}$/.test(url)) return prefix + url;
+  return null;
+}
+function mdInline(text, parent, inLink) {
+  const re = new RegExp(MD_INLINE.source, 'g');
+  const plain = (t) => { if (t) parent.append(document.createTextNode(t)); };
+  let last = 0, m;
+  while ((m = re.exec(text)) !== null) {
+    const at = m.index;
+    if (m[7] !== undefined || m[10] !== undefined) {   // gạch dưới chỉ in nghiêng/đậm ở ranh giới từ: snake_case giữ nguyên
+      const before = text[at - 1], after = text[at + m[0].length];
+      if ((before && /\w/.test(before)) || (after && /\w/.test(after))) { re.lastIndex = at + 1; continue; }
+    }
+    if (m[3] !== undefined && (inLink || !mdHref(m[4]))) { re.lastIndex = at + 1; continue; }
+    if (m[5] !== undefined && inLink) { re.lastIndex = at + m[0].length; continue; }
+    const image = m[3] !== undefined && at > last && text[at - 1] === '!';   // ![alt](url): không tự tải ảnh, chỉ hiện liên kết
+    plain(text.slice(last, image ? at - 1 : at));
+    last = at + m[0].length;
+    if (m[2] !== undefined) parent.append(h('code', {text: m[2].replace(/^ (.*) $/, '$1')}));
+    else if (m[3] !== undefined) { const a = h('a', {href: mdHref(m[4]), target: '_blank', rel: 'noopener noreferrer'}); if (image) a.append('🖼 '); mdInline(m[3], a, true); parent.append(a); }
+    else if (m[5] !== undefined) parent.append(h('a', {href: m[5], target: '_blank', rel: 'noopener noreferrer', text: m[5]}));
+    else if (m[6] !== undefined || m[7] !== undefined) { const e = h('strong'); mdInline(m[6] !== undefined ? m[6] : m[7], e, inLink); parent.append(e); }
+    else if (m[8] !== undefined) { const e = h('del'); mdInline(m[8], e, inLink); parent.append(e); }
+    else { const e = h('em'); mdInline(m[9] !== undefined ? m[9] : m[10], e, inLink); parent.append(e); }
+  }
+  plain(text.slice(last));
+}
+function mdCells(line) {
+  const cells = []; let cur = '';
+  const body = line.trim().replace(/^\|/, '');
+  for (let i = 0; i < body.length; i++) {
+    if (body[i] === '\\' && body[i + 1] === '|') { cur += '|'; i++; }
+    else if (body[i] === '|') { cells.push(cur.trim()); cur = ''; }
+    else cur += body[i];
+  }
+  if (cur.trim() || !/\|\s*$/.test(line)) cells.push(cur.trim());
+  return cells;
+}
+function mdList(lines, i) {
+  const first = MD_LIST.exec(lines[i]);
+  const base = first[1].length, ordered = /\d/.test(first[2]);
+  const list = h(ordered ? 'ol' : 'ul');
+  if (ordered && parseInt(first[2], 10) !== 1) list.setAttribute('start', String(parseInt(first[2], 10)));
+  let last = null;
+  while (i < lines.length) {
+    const m = MD_LIST.exec(lines[i]);
+    if (!m) {
+      if (!lines[i].trim()) {                          // dòng trống: chỉ tiếp tục nếu mục kế tiếp vẫn thuộc danh sách
+        const next = lines[i + 1] !== undefined ? MD_LIST.exec(lines[i + 1]) : null;
+        if (next && next[1].length >= base) { i++; continue; }
+        break;
+      }
+      if (last && /^\s+\S/.test(lines[i]) && !MD_FENCE.test(lines[i])) { last.append(h('br')); mdInline(lines[i].trim(), last); i++; continue; }
+      break;
+    }
+    const indent = m[1].length;
+    if (indent < base) break;
+    if (indent > base && last) { const [nested, next] = mdList(lines, i); last.append(nested); i = next; continue; }
+    if (/\d/.test(m[2]) !== ordered) break;
+    const li = h('li');
+    let content = m[3];
+    const task = /^\[([ xX])\]\s+(.*)$/.exec(content);
+    if (task) { li.append(task[1] === ' ' ? '☐ ' : '☑ '); content = task[2]; }
+    mdInline(content, li);
+    list.append(li); last = li; i++;
+  }
+  return [list, i];
+}
+function mdStartsBlock(lines, i) {
+  const l = lines[i];
+  return MD_FENCE.test(l) || MD_HEADING.test(l) || MD_HR.test(l) || MD_QUOTE.test(l) || MD_LIST.test(l) ||
+    (l.includes('|') && lines[i + 1] !== undefined && MD_TABLE_SEP.test(lines[i + 1]));
+}
+function mdBlocks(lines, parent) {
+  let i = 0;
+  while (i < lines.length) {
+    const line = lines[i];
+    if (!line.trim()) { i++; continue; }
+    let m = MD_FENCE.exec(line);
+    if (m) {
+      const close = new RegExp('^\\s{0,3}' + m[1][0] + '{' + m[1].length + ',}\\s*$'), code = [];
+      i++;
+      while (i < lines.length && !close.test(lines[i])) code.push(lines[i++]);
+      i++;
+      parent.append(h('pre', {}, h('code', {text: code.join('\n')})));
+      continue;
+    }
+    if ((m = MD_HEADING.exec(line))) { const e = h('h' + m[1].length); mdInline(m[2], e); parent.append(e); i++; continue; }
+    if (MD_HR.test(line)) { parent.append(h('hr')); i++; continue; }
+    if (MD_QUOTE.test(line)) {
+      const inner = [];
+      while (i < lines.length && (m = MD_QUOTE.exec(lines[i]))) { inner.push(m[1]); i++; }
+      const e = h('blockquote'); mdBlocks(inner, e); parent.append(e);
+      continue;
+    }
+    if (line.includes('|') && lines[i + 1] !== undefined && MD_TABLE_SEP.test(lines[i + 1])) {
+      const head = mdCells(line), align = mdCells(lines[i + 1]).map((c) => /^:-+:$/.test(c) ? 'center' : /-:$/.test(c) ? 'right' : '');
+      const table = h('table'), thead = h('thead'), tbody = h('tbody'), hr = h('tr');
+      head.forEach((c, k) => { const th = h('th', align[k] ? {style: 'text-align:' + align[k]} : {}); mdInline(c, th); hr.append(th); });
+      thead.append(hr); table.append(thead, tbody);
+      i += 2;
+      while (i < lines.length && lines[i].trim() && lines[i].includes('|')) {
+        const tr = h('tr');
+        const row = mdCells(lines[i]);
+        for (let k = 0; k < head.length; k++) { const td = h('td', align[k] ? {style: 'text-align:' + align[k]} : {}); mdInline(row[k] || '', td); tr.append(td); }
+        tbody.append(tr); i++;
+      }
+      parent.append(h('div', {class: 'tablewrap'}, table));
+      continue;
+    }
+    if (MD_LIST.test(line)) { const [list, next] = mdList(lines, i); parent.append(list); i = next; continue; }
+    const p = h('p');
+    do {
+      if (p.childNodes.length) p.append(h('br'));
+      mdInline(lines[i].trim(), p);
+      i++;
+    } while (i < lines.length && lines[i].trim() && !mdStartsBlock(lines, i));
+    parent.append(p);
+  }
+}
+function renderMarkdown(source) {
+  const root = h('div', {class: 'md'});
+  const text = String(source == null ? '' : source).replace(/\r\n?/g, '\n');
+  if (text.length > 60000) root.append(h('pre', {}, h('code', {text})));
+  else mdBlocks(text.split('\n'), root);
+  return root;
+}
+async function previewFile(f) {
+  const href = prefix + '/api/v1/files/' + f.id;
+  const title = h('h2', {id: 'dlgtitle', text: f.name || 'Tệp'});
+  if (typeof f.size === 'number' && f.size > 2 * 1048576) { dialog(title, h('p', {text: 'Tệp lớn (' + fmtSize(f.size) + '); hãy tải về để xem.'}), closeBtn()); return; }
+  dialog(title, h('p', {class: 'meta', text: 'Đang tải…'}), closeBtn());
+  try {
+    const response = await fetch(href, {credentials: 'same-origin'});
+    if (!response.ok) throw new Error('Không mở được tệp (' + response.status + ').');
+    let text = await response.text();
+    const cut = text.length > 200000;
+    if (cut) text = text.slice(0, 200000);
+    const isMd = /\.(md|markdown)$/i.test(f.name || '');
+    const view = h('div'), tools = h('div', {class: 'md-tools'});
+    const show = (formatted) => view.replaceChildren(formatted ? renderMarkdown(text) : h('pre', {class: 'plain', text}));
+    if (isMd) {
+      tools.append(h('button', {class: 'btn alt', type: 'button', text: 'Định dạng', onclick: () => show(true)}),
+        h('button', {class: 'btn alt', type: 'button', text: 'Văn bản gốc', onclick: () => show(false)}));
+    }
+    show(isMd);
+    dialog(title, isMd ? tools : null, view, cut ? h('p', {class: 'warn', text: 'Chỉ hiện 200.000 ký tự đầu; hãy tải về để xem đủ.'}) : null,
+      h('div', {class: 'toolbar'}, h('a', {class: 'btn alt', href, target: '_blank', rel: 'noopener noreferrer', text: 'Mở / tải về', style: 'text-decoration:none;display:inline-flex;align-items:center'}), closeBtn()));
+  } catch (e) { dialog(title, h('p', {class: 'derr', text: e.message}), closeBtn()); }
+}
+
 /* ---------------------------------------------------------------- thanh AI */
 function renderAgents() {
   $('#agentchips').replaceChildren(...S.agents.map((a) => h('span', {class: 'chip', title: a.name + ' · ' + a.mode + ' · thấy lần cuối: ' + ago(a.last_seen), style: '--person:' + (a.online ? 'var(--ok)' : '#9aa5b8')},
@@ -273,7 +455,8 @@ function renderMessage(m) {
     if (f.id && FILE_ID.test(f.id)) {
       const href = prefix + '/api/v1/files/' + f.id;
       const link = (...kids) => h('a', {href, target: '_blank', rel: 'noopener noreferrer'}, ...kids);
-      return h('li', {}, link('📎 ' + (f.name || 'tệp') + (typeof f.size === 'number' ? ' (' + fmtSize(f.size) + ')' : '')),
+      return h('li', {}, link('📎 ' + (f.name || 'tệp') + (typeof f.size === 'number' ? ' (' + fmtSize(f.size) + ')' : '')), ' ',
+        f.mime === 'text/plain' ? h('button', {class: 'tag', type: 'button', text: '👁 Xem', onclick: () => previewFile(f)}) : null,
         IMAGE_MIMES.includes(f.mime) ? link(h('img', {class: 'thumb', src: href, alt: f.name || 'ảnh', loading: 'lazy'})) : null);
     }
     const url = safeUrl(f.url);
@@ -282,7 +465,7 @@ function renderMessage(m) {
   return h('article', {class: 'msg' + (mine ? ' mine' : ''), style: '--person:' + colorOf(m.from), id: 'm' + m.id},
     meta,
     m.title ? h('div', {class: 'meta'}, h('strong', {text: m.title})) : null,
-    h('p', {class: 'body', text: m.body}),
+    renderMarkdown(m.body),
     files.length ? h('ul', {class: 'files'}, files) : null);
 }
 function renderFeed() {
@@ -383,11 +566,11 @@ async function openTask(id) {
     h('h2', {id: 'dlgtitle', text: task.title}),
     h('div', {class: 'meta'}, h('span', {class: 'st ' + task.status, text: STATUS[task.status]}), h('span', {text: '#' + task.id}),
       task.project ? h('span', {text: 'dự án ' + task.project}) : null, h('span', {text: 'tạo bởi ' + task.created_by + ' · ' + when(task.created_at)})),
-    h('p', {class: 'body', text: task.description}),
+    renderMarkdown(task.description),
     h('strong', {text: 'Lịch sử'}),
     h('ul', {class: 'timeline'}, (task.events || []).map((e) => h('li', {},
       h('span', {class: 'meta', text: when(e.created_at) + ' · ' + e.actor + ': ' + (e.from_status ? STATUS[e.from_status] + ' → ' : 'tạo → ') + STATUS[e.to_status]}),
-      e.note ? h('div', {class: 'body', text: e.note}) : null))),
+      e.note ? renderMarkdown(e.note) : null))),
     note, attach.el, err,
     h('div', {class: 'toolbar'}, buttons),
     terminal ? null : h('div', {class: 'two'}, h('label', {}, 'Người làm', sa), h('label', {}, 'Người review', sr)),

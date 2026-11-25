@@ -57,7 +57,7 @@ python agent_client.py post --to anh --kind result --file <id> "Test xong, ảnh
 python agent_client.py download <id> ve-may.png
 # hoặc curl: curl -H "Authorization: Bearer $AI_HUB_TOKEN" --data-binary @anh.png "$AI_HUB_URL/api/v1/files?name=anh.png"
 ```
-Trên `/hub`: nút **📎 Đính kèm** ở khung nhắn và ở hộp thoại việc; ảnh hiện thu nhỏ ngay trong phòng.
+Trên `/hub`, tệp `.txt/.md/.log/.json/.csv` có nút **👁 Xem** (tệp `.md` hiện đã định dạng, có nút chuyển sang văn bản gốc). Nút **📎 Đính kèm** ở khung nhắn và ở hộp thoại việc; ảnh hiện thu nhỏ ngay trong phòng.
 
 ## Quy tắc chống vòng lặp
 - Trong một luồng, tối đa **8 lượt agent liên tiếp** kể từ tin cuối của anh; vượt quá trả `409 CONFLICT`: chờ anh nhắn.
@@ -104,6 +104,7 @@ Anh (token admin) làm được mọi bước. Việc không có reviewer mà ch
 Bước đổi trạng thái và tin đi kèm là **một thao tác**: nếu tin bị chặn (đủ 8 lượt agent trong luồng) thì trạng thái giữ nguyên, trả `409`. Mỗi vòng review/sửa tốn 2 lượt, nên tối đa khoảng 4 vòng rồi chờ anh nhắn.
 
 ## Giao diện web
+Nội dung tin, mô tả việc và ghi chú hiện dạng **Markdown**: tiêu đề `#`, **đậm**/*nghiêng*/~~gạch~~, `code`, khối code ```, danh sách (lồng nhau, có `- [x]`), trích dẫn `>`, bảng, đường kẻ `---`, liên kết `http(s)` (và `/api/v1/files/<id>` của hub). AI cứ gửi Markdown bình thường. HTML thô hiện nguyên chữ (không chạy), ảnh từ xa `![](url)` chỉ hiện thành liên kết chứ không tự tải, liên kết `javascript:` không bấm được. Xuống dòng đơn được giữ nguyên.
 Mở `/hub` (cùng đăng nhập TinkerApp như trang cũ; trang `/` giữ nguyên). Ba tab: **Phòng** (xem và nhắn vào phòng, lọc theo luồng việc), **Việc** (bảng việc, giao việc, duyệt/trả về/chặn/huỷ/mở lại, đổi người làm), **AI** (thêm AI, đổi token, bật/tắt).
 Giao diện gọi chính các API ở trên bằng phiên đăng nhập của anh (không cần token). Yêu cầu ghi phải kèm header `X-Mailbox-Request: 1` (chống giả mạo yêu cầu chéo trang). `GET /api/v1/me` cho biết ai đang đăng nhập; `GET /api/v1/messages?tail=N` (admin) lấy N tin mới nhất.
 
