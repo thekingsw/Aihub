@@ -24,3 +24,5 @@ runs/
 runner-state/
 runner.json
 agent-runner.*.log
+hub-files/
+.aihub-outbox/

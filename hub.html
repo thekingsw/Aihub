@@ -77,6 +77,10 @@ dialog::backdrop{background:#0008}
 .timeline li{border-left:2px solid var(--line);padding-left:10px}
 .token{font-family:ui-monospace,Consolas,monospace;font-size:13px;word-break:break-all;padding:10px;border-radius:10px;background:var(--chip);user-select:all}
 .warn{color:var(--warn);font-size:13px}
+.attach{display:inline-flex;gap:6px;flex-wrap:wrap;align-items:center}
+.attach .chip button{background:none;border:0;min-height:20px;padding:0 2px;color:var(--mute)}
+.thumb{display:block;max-width:100%;max-height:220px;border-radius:8px;border:1px solid var(--line);margin-top:6px}
+input[type=file]{display:none}
 .derr{color:var(--bad);font-size:13px;margin:0}.derr:empty{display:none}
 @media (max-width:560px){.dlg .two{grid-template-columns:1fr}.shell{padding-left:10px;padding-right:10px}}
 </style>
@@ -102,6 +106,7 @@ dialog::backdrop{background:#0008}
       <div class="row">
         <label for="to" class="chip">Gửi tới</label>
         <select id="to" aria-label="Người nhận"></select>
+        <span id="attachslot"></span>
         <span style="flex:1"></span>
         <button class="btn" id="send" type="submit">Gửi</button>
       </div>
@@ -131,7 +136,9 @@ dialog::backdrop{background:#0008}
 'use strict';
 const prefix = location.pathname.startsWith('/apps/ai-hub') ? '/apps/ai-hub' : '';
 const $ = (sel) => document.querySelector(sel);
-const S = {agents: [], tasks: [], messages: [], lastId: 0, thread: null, tab: 'room', unseen: 0, authed: true};
+const S = {agents: [], tasks: [], messages: [], lastId: 0, thread: null, tab: 'room', unseen: 0, authed: true, limits: {}};
+const FILE_ID = /^[0-9a-f]{32}$/;
+const IMAGE_MIMES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 const STATUS = {todo: 'Chờ làm', in_progress: 'Đang làm', in_review: 'Chờ review', blocked: 'Bị chặn', done: 'Xong', cancelled: 'Đã huỷ'};
 const KIND = {task: 'Giao việc', handoff: 'Nộp review', review: 'Review', result: 'Báo cáo', ack: 'Đã nhận', notice: 'Thông báo'};
 const PALETTE = ['#7c3aed', '#16815d', '#c2410c', '#0e7490', '#be185d', '#4d7c0f', '#a16207', '#4338ca'];
@@ -177,6 +184,7 @@ function ago(iso) {
   return Math.floor(s / 86400) + ' ngày trước';
 }
 const rid = () => 'ui-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const fmtSize = (n) => n < 1024 ? n + ' B' : n < 1048576 ? Math.round(n / 1024) + ' KB' : (n / 1048576).toFixed(1) + ' MB';
 const safeUrl = (u) => /^https?:\/\//i.test(u || '') ? u : null;
 
 async function api(path, method = 'GET', body) {
@@ -199,6 +207,43 @@ async function copyText(text) {
   const t = h('textarea', {style: 'position:fixed;opacity:0'}); t.value = text; document.body.append(t); t.select();
   let ok = false; try { ok = document.execCommand('copy'); } catch { ok = false; }
   t.remove(); return ok;
+}
+
+async function uploadFile(file) {
+  const max = S.limits.max_upload_bytes;
+  if (max && file.size > max) throw new Error('“' + file.name + '” nặng ' + fmtSize(file.size) + ', tối đa ' + fmtSize(max) + '.');
+  const response = await fetch(prefix + '/api/v1/files?name=' + encodeURIComponent(file.name), {
+    method: 'POST', credentials: 'same-origin', body: file,
+    headers: {'Content-Type': 'application/octet-stream', 'X-Mailbox-Request': '1'},
+  });
+  let data;
+  try { data = await response.json(); } catch { throw new Error('Phản hồi máy chủ không hợp lệ.'); }
+  if (!response.ok || !data.ok) {
+    if (response.status === 401) S.authed = false;
+    throw new Error(data.message || 'Không tải lên được “' + file.name + '”.');
+  }
+  return data.file;
+}
+function attachWidget(onError) {
+  const picked = [];
+  const input = h('input', {type: 'file', multiple: true, 'aria-label': 'Chọn tệp đính kèm'});
+  const list = h('span', {class: 'attach'});
+  const button = h('button', {class: 'btn alt', type: 'button', text: '📎 Đính kèm', onclick: () => input.click()});
+  const render = () => list.replaceChildren(...picked.map((f, i) => h('span', {class: 'chip'}, f.name + ' · ' + fmtSize(f.size),
+    h('button', {type: 'button', 'aria-label': 'Bỏ ' + f.name, text: '✕', onclick: () => { picked.splice(i, 1); render(); }}))));
+  input.addEventListener('change', async () => {
+    const files = [...input.files];
+    input.value = '';
+    button.disabled = true; button.textContent = 'Đang tải lên…';
+    for (const file of files) {
+      if (picked.length >= 10) { onError(new Error('Tối đa 10 tệp mỗi lần.')); break; }
+      try { picked.push(await uploadFile(file)); onError(null); } catch (e) { onError(e); }
+      render();
+    }
+    button.disabled = false; button.textContent = '📎 Đính kèm';
+  });
+  return {el: h('span', {class: 'attach'}, button, input, list), ids: () => picked.map((f) => ({id: f.id})),
+    busy: () => button.disabled, reset: () => { picked.length = 0; render(); }};
 }
 
 /* ---------------------------------------------------------------- thanh AI */
@@ -225,8 +270,14 @@ function renderMessage(m) {
     m.reply_to ? h('span', {text: '↩ #' + m.reply_to, title: 'Trả lời tin #' + m.reply_to}) : null,
     h('time', {datetime: m.created_at, text: when(m.created_at)}));
   const files = (m.files || []).map((f) => {
+    if (f.id && FILE_ID.test(f.id)) {
+      const href = prefix + '/api/v1/files/' + f.id;
+      const link = (...kids) => h('a', {href, target: '_blank', rel: 'noopener noreferrer'}, ...kids);
+      return h('li', {}, link('📎 ' + (f.name || 'tệp') + (typeof f.size === 'number' ? ' (' + fmtSize(f.size) + ')' : '')),
+        IMAGE_MIMES.includes(f.mime) ? link(h('img', {class: 'thumb', src: href, alt: f.name || 'ảnh', loading: 'lazy'})) : null);
+    }
     const url = safeUrl(f.url);
-    return h('li', {}, url ? h('a', {href: url, target: '_blank', rel: 'noopener noreferrer', text: '📎 ' + (f.name || f.url)}) : '📎 ' + (f.name || f.id || 'tệp'));
+    return h('li', {}, url ? h('a', {href: url, target: '_blank', rel: 'noopener noreferrer', text: '🔗 ' + (f.name || f.url)}) : '📎 ' + (f.name || 'tệp'));
   });
   return h('article', {class: 'msg' + (mine ? ' mine' : ''), style: '--person:' + colorOf(m.from), id: 'm' + m.id},
     meta,
@@ -257,12 +308,15 @@ async function loadMessages(initial) {
 const updateTitle = () => { document.title = (S.unseen ? '(' + S.unseen + ') ' : '') + 'AI Hub'; };
 async function sendMessage(ev) {
   ev.preventDefault();
-  const body = $('#msg').value.trim();
+  if (S.attach.busy()) { showErr(new Error('Đang tải tệp lên, đợi một chút nhé.')); return; }
+  const files = S.attach.ids();
+  const body = $('#msg').value.trim() || (files.length ? '(Tệp đính kèm)' : '');
   if (!body) return;
   const payload = {body, to: $('#to').value || 'all', request_id: rid()};
+  if (files.length) payload.files = files;
   if (S.thread) payload.thread_id = S.thread;
   $('#send').disabled = true;
-  try { await api('/messages', 'POST', payload); $('#msg').value = ''; showErr(null); await loadMessages(false); }
+  try { await api('/messages', 'POST', payload); $('#msg').value = ''; S.attach.reset(); showErr(null); await loadMessages(false); }
   catch (e) { showErr(e); }
   finally { $('#send').disabled = false; }
 }
@@ -301,10 +355,13 @@ async function openTask(id) {
   try { task = (await api('/tasks/' + encodeURIComponent(id))).task; } catch (e) { showErr(e); return; }
   const err = h('p', {class: 'derr', role: 'alert'});
   const note = h('textarea', {id: 'tnote', placeholder: 'Ghi chú (bắt buộc với trả về sửa / bị chặn / huỷ)', 'aria-label': 'Ghi chú'});
+  const attach = attachWidget((e) => { err.textContent = e ? e.message : ''; });
   const act = async (target, needNote) => {
     if (needNote && !note.value.trim()) { err.textContent = 'Hành động này cần ghi chú.'; note.focus(); return; }
+    if (attach.busy()) { err.textContent = 'Đang tải tệp lên, đợi một chút nhé.'; return; }
     try {
-      await api('/tasks/' + encodeURIComponent(id) + '/status', 'POST', {status: target, note: note.value.trim() || undefined});
+      const files = attach.ids();
+      await api('/tasks/' + encodeURIComponent(id) + '/status', 'POST', {status: target, note: note.value.trim() || undefined, files: files.length ? files : undefined});
       await Promise.all([loadTasks(), loadMessages(false)]);
       openTask(id);
     } catch (e) { err.textContent = e.message; }
@@ -331,7 +388,7 @@ async function openTask(id) {
     h('ul', {class: 'timeline'}, (task.events || []).map((e) => h('li', {},
       h('span', {class: 'meta', text: when(e.created_at) + ' · ' + e.actor + ': ' + (e.from_status ? STATUS[e.from_status] + ' → ' : 'tạo → ') + STATUS[e.to_status]}),
       e.note ? h('div', {class: 'body', text: e.note}) : null))),
-    note, err,
+    note, attach.el, err,
     h('div', {class: 'toolbar'}, buttons),
     terminal ? null : h('div', {class: 'two'}, h('label', {}, 'Người làm', sa), h('label', {}, 'Người review', sr)),
     terminal ? null : h('div', {class: 'toolbar'}, h('button', {class: 'btn alt', type: 'button', text: 'Lưu người làm / review', onclick: reassign})),
@@ -437,6 +494,8 @@ async function tick() {
 }
 async function init() {
   for (const b of document.querySelectorAll('[role=tab]')) b.addEventListener('click', () => showTab(b.dataset.tab));
+  S.attach = attachWidget(showErr);
+  $('#attachslot').replaceWith(S.attach.el);
   $('#composer').addEventListener('submit', sendMessage);
   $('#msg').addEventListener('keydown', (e) => { if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) $('#composer').requestSubmit(); });
   $('#newtask').addEventListener('click', newTaskDialog);
@@ -444,7 +503,7 @@ async function init() {
   $('#fassignee').addEventListener('change', renderBoard);
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { S.unseen = 0; updateTitle(); tick(); } });
   try {
-    await api('/me');
+    S.limits = (await api('/me')).limits || {};
     await Promise.all([loadAgents(), loadTasks(), loadMessages(true)]);
     renderFeed(); renderBoard();
     $('#feed').scrollTop = $('#feed').scrollHeight;

@@ -8,9 +8,10 @@ import os
 import re
 import secrets
 import threading
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 import hub_db
+import hub_files
 import hub_tasks
 from hub_db import HubError, Forbidden, NotFound
 
@@ -99,11 +100,43 @@ def _messages_payload(messages, after):
     return {"ok": True, "messages": messages, "last_id": messages[-1]["id"] if messages else after}
 
 
+class _Raw:
+    """Phản hồi tự ghi (tải tệp), không phải JSON."""
+
+    def __init__(self, send):
+        self.send = send
+
+
+def _send_file(handler, row, path):
+    inline = row["mime"] in hub_files.INLINE_MIMES
+    ascii_name = "".join(c if 32 <= ord(c) < 127 and c not in '"\\' else "_" for c in row["name"]) or "tep"
+    handler.send_response(200)
+    handler.send_header("Content-Type", row["mime"] + ("; charset=utf-8" if row["mime"] == "text/plain" else "")
+                        if inline else hub_files.OCTET)
+    handler.send_header("Content-Length", str(row["size"]))
+    handler.send_header("Content-Disposition", "%s; filename=\"%s\"; filename*=UTF-8''%s" % (
+        "inline" if inline else "attachment", ascii_name, quote(row["name"])))
+    handler.send_header("X-Content-Type-Options", "nosniff")
+    handler.send_header("Content-Security-Policy", "default-src 'none'; sandbox")
+    handler.send_header("Cache-Control", "private, max-age=86400")
+    handler.end_headers()
+    try:
+        with open(path, "rb") as source:
+            while True:
+                chunk = source.read(hub_files.CHUNK)
+                if not chunk:
+                    break
+                handler.wfile.write(chunk)
+    except (BrokenPipeError, ConnectionResetError):
+        pass
+
+
 def _get(handler, path, query):
     hub = get_hub()
     principal = _authenticate(handler)
     if path == "/api/v1/me":
-        return {"ok": True, "me": principal.sender, "admin": principal.admin}
+        return {"ok": True, "me": principal.sender, "admin": principal.admin,
+                "limits": {"max_upload_bytes": hub_files.limits()[0]}}
     if path == "/api/v1/messages":
         after, limit = _int(query, "after", 0), _int(query, "limit", 100)
         if principal.admin:
@@ -119,6 +152,14 @@ def _get(handler, path, query):
         return _messages_payload(rows, after)
     if path == "/api/v1/agents":
         return {"ok": True, "agents": hub.list_agents()}
+    match = re.fullmatch(r"/api/v1/files/([0-9a-f]{32})", path)
+    if match:
+        row, file_path = hub_files.store_for(hub).open(match.group(1))
+        return _Raw(lambda h: _send_file(h, row, file_path))
+    if path == "/api/v1/files":
+        _require_admin(principal)
+        return {"ok": True, "files": hub.list_files(_int(query, "limit", 100)),
+                "used_bytes": hub.files_total_size(), "quota_bytes": hub_files.limits()[1]}
     board = hub_tasks.board_for(hub)
     if path == "/api/v1/tasks":
         first = lambda name: (query.get(name) or [None])[0]  # noqa: E731
@@ -130,9 +171,19 @@ def _get(handler, path, query):
     raise NotFound("Không có đường dẫn này.")
 
 
-def _post(handler, path):
+def _post(handler, path, query):
     hub = get_hub()
     principal = _authenticate(handler)
+    if path == "/api/v1/files":
+        name = (query.get("name") or [""])[0]
+        if not name.strip():
+            raise HubError("Thiếu tham số name (tên tệp).")
+        try:
+            length = int(handler.headers.get("Content-Length", ""))
+        except ValueError:
+            length = None
+        handler.connection.settimeout(60)  # chặn máy khách chậm giữ luồng mãi
+        return {"ok": True, "file": hub_files.store_for(hub).save(principal.sender, name, handler.rfile, length)}, 201
     if path == "/api/v1/messages":
         data = _read_json(handler)
         claimed = data.pop("from", None)
@@ -166,6 +217,10 @@ def _post(handler, path):
                                           data.get("role", ""), data.get("poll_interval", 300))
         return {"ok": True, "agent": agent, "token": token,
                 "note": "Token chỉ hiện một lần; hãy lưu ngay."}, 201
+    match = re.fullmatch(r"/api/v1/files/([0-9a-f]{32})/delete", path)
+    if match:
+        row = hub_files.store_for(hub).delete(match.group(1))
+        return {"ok": True, "deleted": hub.file_public(row)}
     match = re.fullmatch(r"/api/v1/agents/([a-z][a-z0-9_-]{1,31})/(rotate|enable|disable)", path)
     if match:
         agent_id, action = match.groups()
@@ -184,9 +239,12 @@ def dispatch(handler, method):
         if method == "GET":
             result = _get(handler, path.path.rstrip("/"), query)
         elif method == "POST":
-            result = _post(handler, path.path.rstrip("/"))
+            result = _post(handler, path.path.rstrip("/"), query)
         else:
             raise HubError("Phương thức không được hỗ trợ.", 405, "METHOD_NOT_ALLOWED")
+        if isinstance(result, _Raw):
+            result.send(handler)
+            return
         status = 200
         if isinstance(result, tuple):
             result, status = result

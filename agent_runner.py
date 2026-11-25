@@ -15,7 +15,9 @@ import argparse
 import json
 import os
 import re
+import shutil
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -34,6 +36,8 @@ SAFE_ENV = ("PATH", "PATHEXT", "SYSTEMROOT", "WINDIR", "COMSPEC", "TEMP", "TMP",
             "APPDATA", "LOCALAPPDATA", "PROGRAMDATA", "PROGRAMFILES", "PROGRAMFILES(X86)", "USERNAME", "USER",
             "LANG", "LC_ALL", "LC_CTYPE", "TERM", "SHELL", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "SYSTEMDRIVE")
 HEARTBEAT_SECONDS = 30
+OUTBOX_DIR = ".aihub-outbox"
+MAX_ATTACHMENTS = 10
 
 
 class AuthError(Exception):
@@ -77,6 +81,7 @@ class AgentConfig:
         self.timeout = float(raw.get("timeout_seconds", 900))
         self.max_runs_per_hour = int(raw.get("max_runs_per_hour", 12))
         self.max_summary = int(raw.get("max_summary_chars", 3000))
+        self.outbox = bool(raw.get("outbox", True))
         self.chat = bool(raw.get("chat", True))
         self.chat_from_agents = bool(raw.get("chat_from_agents", True))
         patterns = raw.get("fail_patterns", [r"^Failed to create unified exec process: .*runner pipe-in"])
@@ -164,6 +169,23 @@ def last_match(pattern, text):
     return found
 
 
+# Dòng cảnh báo khởi động của CLI (vd Claude Code không nhận model tự chế
+# như qwen3-coder:30b): in ra đầu mỗi lần chạy, không phải nội dung AI trả
+# lời. Lọc khỏi output trước khi xét SILENT / VERDICT / đăng báo cáo, nếu
+# không mọi tin của agent đều mở đầu bằng cùng 2 dòng cảnh báo và trông như
+# bị lặp. Bản thô vẫn giữ nguyên trong runs/<id>.log để tra cứu.
+CLI_WARNING_RES = (
+    re.compile(r"^Claude Code doesn't recognize the model\b", re.I),
+    re.compile(r"^\[claude-code:unrecognized_model\]", re.I),
+)
+
+
+def strip_cli_warnings(text):
+    lines = [line for line in text.splitlines()
+             if not any(p.search(line.strip()) for p in CLI_WARNING_RES)]
+    return "\n".join(lines).strip()
+
+
 def kill_tree(proc):
     try:
         if os.name == "nt":
@@ -200,6 +222,7 @@ class AgentRunner:
             pass
         self.name = cfg.id
         self.role = ""
+        self.max_upload = 25 * 1024 * 1024
 
     # --------------------------------------------------------------- trạng thái
     def _save(self):
@@ -219,6 +242,7 @@ class AgentRunner:
             raise AuthError(me.get("message") or me.get("error") or "Không xác thực được.")
         if me.get("me") != self.cfg.id:
             raise AuthError("Token thuộc agent %s, không phải %s." % (me.get("me"), self.cfg.id))
+        self.max_upload = int(me.get("limits", {}).get("max_upload_bytes", self.max_upload))
         for agent in self.client.agents().get("agents", []):
             if agent["id"] == self.cfg.id:
                 self.name, self.role = agent["name"], agent.get("role", "")
@@ -291,7 +315,7 @@ class AgentRunner:
             outcome = json.loads(outcome_path.read_text(encoding="utf-8"))
             if not outcome.get("delivered"):
                 log("%s: báo lại kết quả tin #%d đã chạy trước đó" % (self.cfg.id, m["id"]))
-                self._deliver(m, outcome)
+                self._deliver(m, outcome, outcome_path)
                 self._mark_delivered(outcome_path, outcome)
             return
         job, reason = self.decide(m, task)
@@ -307,7 +331,7 @@ class AgentRunner:
                 return
         outcome = self._execute(m, task, job)
         outcome_path.write_text(json.dumps(outcome, ensure_ascii=False), encoding="utf-8")
-        self._deliver(m, outcome)
+        self._deliver(m, outcome, outcome_path)
         self._mark_delivered(outcome_path, outcome)
 
     @staticmethod
@@ -322,13 +346,22 @@ class AgentRunner:
     def _execute(self, m, task, job):
         workdir = self._workdir(task)
         prompt = {WORK: self._work_prompt, REVIEW: self._review_prompt, CHAT: self._chat_prompt}[job](m, task, workdir)
+        outbox = None
+        if self.cfg.outbox and os.path.isdir(workdir):
+            outbox = Path(workdir) / OUTBOX_DIR / str(m["id"])
+            outbox.mkdir(parents=True, exist_ok=True)
+            prompt += self._outbox_note(outbox)
         self.state["runs"].append(self.clock())
         self._save()
         log("%s: chạy %s cho tin #%d%s" % (self.cfg.id, job, m["id"], " (việc %s)" % task["id"] if task else ""))
         result = self._run_cli(prompt, workdir, m["id"])
         text = result.text
         summary = self._summary(text, m["id"])
-        base = {"job": job, "run_seconds": round(result.seconds, 1), "rc": result.rc, "delivered": False}
+        attachments, skipped = self._collect_outbox(outbox, m["id"]) if outbox else ([], [])
+        if skipped:
+            summary += "\n\n(Không đính kèm: %s)" % "; ".join(skipped)
+        base = {"job": job, "run_seconds": round(result.seconds, 1), "rc": result.rc, "delivered": False,
+                "attachments": attachments}
         tid = task["id"] if task else None
         if job == WORK:
             blocked = last_match(BLOCKED_RE, text)
@@ -355,6 +388,71 @@ class AgentRunner:
             summary = "Em chạy không thành công. %s" % self._failure_note(result)
         return dict(base, type="post", kind="message", to=None, task_id=tid, reply_to=m["id"], body=summary,
                     request_id="%s-%d-chat" % (self.cfg.id, m["id"]))
+
+    @staticmethod
+    def _outbox_note(outbox):
+        return ("\n## Tệp đính kèm\n- Muốn gửi tệp kèm báo cáo (ảnh chụp màn hình, kết quả, báo cáo dài…), đặt tệp vào thư mục: %s\n"
+                "  Tối đa %d tệp; không đặt khoá, mật khẩu hay dữ liệu nhạy cảm vào đó.\n" % (outbox, MAX_ATTACHMENTS))
+
+    def _collect_outbox(self, outbox, msg_id):
+        """Chuyển tệp AI để trong outbox sang kho của runner (runs/<agent>/<id>.files/). Chỉ nhận tệp thường,
+        bỏ symlink/hardlink (tránh lén gửi tệp ngoài thư mục), tệp ẩn, tệp quá lớn hoặc quá nhiều."""
+        attachments, skipped = [], []
+        if not outbox.is_dir():
+            return attachments, skipped
+        dest_dir = self.runs_dir / ("%d.files" % msg_id)
+        candidates = []
+        for root, dirs, names in os.walk(outbox, followlinks=False):
+            if Path(root).relative_to(outbox).parts[1:]:  # chỉ xuống tối đa một cấp thư mục con
+                dirs[:] = []
+            candidates.extend(Path(root) / n for n in names)
+        for path in sorted(candidates):
+            rel = path.relative_to(outbox).as_posix()
+            try:
+                info = os.lstat(path)
+            except OSError:
+                continue
+            if not stat.S_ISREG(info.st_mode) or info.st_nlink > 1:
+                skipped.append("%s (không phải tệp thường)" % rel)
+            elif path.name.startswith("."):
+                continue
+            elif info.st_size == 0 or info.st_size > self.max_upload:
+                skipped.append("%s (%s)" % (rel, "rỗng" if info.st_size == 0 else "quá lớn"))
+            elif len(attachments) >= MAX_ATTACHMENTS:
+                skipped.append("%s (quá %d tệp)" % (rel, MAX_ATTACHMENTS))
+            else:
+                dest_dir.mkdir(parents=True, exist_ok=True)
+                stored = dest_dir / ("%02d-%s" % (len(attachments) + 1, path.name))
+                shutil.move(str(path), str(stored))
+                attachments.append({"path": str(stored), "name": path.name, "id": None})
+        shutil.rmtree(outbox, ignore_errors=True)
+        try:  # xoá .aihub-outbox nếu đã trống, tránh để rác trong thư mục dự án
+            outbox.parent.rmdir()
+        except OSError:
+            pass
+        return attachments, skipped
+
+    def _upload_attachments(self, outcome, outcome_path):
+        """Upload tệp chưa có id; lưu id ngay sau mỗi tệp để lần thử lại không tải trùng."""
+        files = []
+        for item in outcome.get("attachments", []):
+            if item.get("id") is None and not item.get("dropped"):
+                try:
+                    reply = self.client.upload(item["path"], item["name"])
+                except FileNotFoundError:
+                    item["dropped"] = "tệp cục bộ đã mất"
+                    continue
+                if reply.get("ok"):
+                    item["id"] = reply["file"]["id"]
+                elif reply.get("error") in ("PAYLOAD_TOO_LARGE", "QUOTA_EXCEEDED", "BAD_REQUEST"):
+                    item["dropped"] = reply.get("message") or reply["error"]
+                else:
+                    raise HubUnavailable("Upload lỗi: %s" % (reply.get("error") or "không rõ"))
+                outcome_path.write_text(json.dumps(outcome, ensure_ascii=False), encoding="utf-8")
+            if item.get("id"):
+                files.append({"id": item["id"]})
+        dropped = ["%s (%s)" % (i["name"], i["dropped"]) for i in outcome.get("attachments", []) if i.get("dropped")]
+        return files, ("\n\n(Không đính kèm được: %s)" % "; ".join(dropped)) if dropped else ""
 
     @staticmethod
     def _failure_note(result):
@@ -385,12 +483,13 @@ class AgentRunner:
         log("%s: hub từ chối tin (%s): %s" % (self.cfg.id, error, reply.get("message")))
         return False
 
-    def _deliver(self, m, outcome):
+    def _deliver(self, m, outcome, outcome_path):
         if outcome["type"] == "none":
             return
         if outcome["type"] == "post":
-            self._post(body=outcome["body"], to=outcome["to"], kind=outcome["kind"], reply_to=outcome.get("reply_to"),
-                       task_id=outcome.get("task_id"), request_id=outcome["request_id"])
+            files, extra = self._upload_attachments(outcome, outcome_path)
+            self._post(body=outcome["body"] + extra, to=outcome["to"], kind=outcome["kind"], reply_to=outcome.get("reply_to"),
+                       task_id=outcome.get("task_id"), request_id=outcome["request_id"], files=files or None)
             return
         task_id = outcome["task_id"]
         current = self.client.task(task_id)
@@ -399,15 +498,18 @@ class AgentRunner:
         if current["task"]["status"] != outcome["expect"]:
             log("%s: việc %s đã ở %s, không báo %s nữa" % (self.cfg.id, task_id, current["task"]["status"], outcome["to"]))
             return
-        reply = self.client.transition(task_id, outcome["to"], outcome["note"])
+        files, extra = self._upload_attachments(outcome, outcome_path)
+        note = outcome["note"] + extra
+        reply = self.client.transition(task_id, outcome["to"], note, files or None)
         if reply.get("ok"):
             return
         error = reply.get("error")
         if error == "CONFLICT":
             # thường là chặn 8 lượt agent: báo thẳng cho anh bằng kind=result (không tính lượt)
             self._post(body="[%s] Xong việc %s nhưng hub không cho đổi sang %s (%s). Kết quả:\n\n%s" % (
-                self.cfg.id, task_id, outcome["to"], reply.get("message"), outcome["note"]),
-                to=["anh"], kind="result", task_id=task_id, request_id="%s-%d-fallback" % (self.cfg.id, m["id"]))
+                self.cfg.id, task_id, outcome["to"], reply.get("message"), note),
+                to=["anh"], kind="result", task_id=task_id, request_id="%s-%d-fallback" % (self.cfg.id, m["id"]),
+                files=files or None)
         elif error in ("FORBIDDEN", "NOT_FOUND", "BAD_REQUEST"):
             log("%s: hub từ chối đổi trạng thái việc %s (%s)" % (self.cfg.id, task_id, reply.get("message")))
         else:
@@ -451,6 +553,7 @@ class AgentRunner:
             raw = redact(out.decode("utf-8", errors="replace"), [self.token])
             (self.runs_dir / ("%d.log" % msg_id)).write_text(raw, encoding="utf-8")
             text = extract_codex_reply(raw) if self.cfg.output_filter == "codex" else raw.strip()
+            text = strip_cli_warnings(text)
             seconds = self.cfg.timeout if timed_out else time.monotonic() - started
             ok = not timed_out and proc.returncode == 0
             if ok and any(p.search(raw) for p in self.cfg.fail_patterns):

@@ -1,4 +1,4 @@
-# Chạy từ cửa sổ PowerShell trên màn hình đăng nhập Windows (Session 1), KHÔNG qua SSH/WMI:
+﻿# Chạy từ cửa sổ PowerShell trên màn hình đăng nhập Windows (Session 1), KHÔNG qua SSH/WMI:
 # Codex CLI cần phiên desktop mới tạo được tiến trình con.
 # Token của từng AI đặt trước một lần ở mức người dùng, ví dụ:
 #   setx AI_HUB_TOKEN_CODEX "ah1_..."      (mở lại PowerShell sau khi setx)

@@ -47,7 +47,9 @@ class UiTests(unittest.TestCase):
 
     def test_session_cookie_acts_as_anh(self):
         status, raw = self.call("/api/v1/me")
-        self.assertEqual((status, json.loads(raw)), (200, {"ok": True, "me": "anh", "admin": True}))
+        data = json.loads(raw)
+        self.assertEqual((status, data["ok"], data["me"], data["admin"]), (200, True, "anh", True))
+        self.assertGreater(data["limits"]["max_upload_bytes"], 0)
         status, raw = self.call("/api/v1/messages", "POST", {"to": "codex", "body": "xin chào"},
                                 {"X-Mailbox-Request": "1"})
         self.assertEqual(status, 201)

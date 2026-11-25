@@ -93,6 +93,9 @@ class HubDB:
                 kind TEXT NOT NULL, task_id TEXT, project TEXT, title TEXT,
                 body TEXT NOT NULL, reply_to INTEGER, thread_id TEXT NOT NULL,
                 request_id TEXT, files TEXT);
+            CREATE TABLE IF NOT EXISTS files(
+                id TEXT PRIMARY KEY, name TEXT NOT NULL, mime TEXT NOT NULL, size INTEGER NOT NULL,
+                sha256 TEXT NOT NULL, uploader TEXT NOT NULL, created_at TEXT NOT NULL);
             CREATE TABLE IF NOT EXISTS msg_recipients(
                 message_id INTEGER NOT NULL, agent TEXT NOT NULL,
                 PRIMARY KEY(message_id, agent));
@@ -185,8 +188,11 @@ class HubDB:
             message["files"] = json.loads(row["files"])
         return message
 
-    @staticmethod
-    def _files(files):
+    FILE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
+
+    def _files(self, files):
+        """Chuẩn hoá danh sách tệp đính kèm. Mục có `id` trỏ tới tệp đã upload (tên, cỡ, đường dẫn lấy từ
+        DB, không tin dữ liệu client gửi); mục chỉ có `url` là liên kết ngoài http(s)."""
         if files is None:
             return None
         if not isinstance(files, list) or len(files) > 10:
@@ -194,12 +200,55 @@ class HubDB:
         clean = []
         for item in files:
             if not isinstance(item, dict):
-                raise HubError("Mỗi mục files phải là object {id, name, url}.")
-            entry = {k: _text(item.get(k), "files." + k, 2048) for k in ("id", "name", "url") if item.get(k) is not None}
-            if not entry.get("url") and not entry.get("id"):
-                raise HubError("Mỗi mục files cần url hoặc id.")
+                raise HubError("Mỗi mục files phải là object {id} hoặc {name, url}.")
+            if item.get("id") is not None:
+                row = self.file_row(item["id"])
+                if row is None:
+                    raise HubError("Tệp đính kèm không tồn tại: %s." % (item["id"] if isinstance(item["id"], str) else "?"))
+                clean.append(self.file_public(row))
+                continue
+            url = _text(item.get("url"), "files.url", 2048)
+            if not url or not url.startswith(("http://", "https://")):
+                raise HubError("Mỗi mục files cần id tệp đã upload hoặc url http(s).")
+            entry = {"url": url}
+            name = _text(item.get("name"), "files.name", 255)
+            if name:
+                entry["name"] = name
             clean.append(entry)
         return clean or None
+
+    # -------------------------------------------------------------------- tệp
+    @staticmethod
+    def file_public(row):
+        return {"id": row["id"], "name": row["name"], "size": row["size"], "mime": row["mime"],
+                "url": "/api/v1/files/" + row["id"]}
+
+    def file_row(self, file_id):
+        if not isinstance(file_id, str) or not self.FILE_ID_RE.match(file_id):
+            return None
+        with self._lock:
+            return self.db.execute("SELECT * FROM files WHERE id=?", (file_id,)).fetchone()
+
+    def add_file(self, file_id, name, mime, size, sha256, uploader):
+        with self._lock:
+            self.db.execute("INSERT INTO files(id,name,mime,size,sha256,uploader,created_at) VALUES(?,?,?,?,?,?,?)",
+                            (file_id, name, mime, size, sha256, uploader, _now()))
+            return self.file_row(file_id)
+
+    def delete_file_row(self, file_id):
+        with self._lock:
+            return self.db.execute("DELETE FROM files WHERE id=?", (file_id,)).rowcount
+
+    def files_total_size(self):
+        with self._lock:
+            return self.db.execute("SELECT COALESCE(SUM(size),0) FROM files").fetchone()[0]
+
+    def list_files(self, limit=100):
+        with self._lock:
+            rows = self.db.execute("SELECT * FROM files ORDER BY created_at DESC, id LIMIT ?",
+                                   (self._limit(limit),)).fetchall()
+        return [dict(self.file_public(r), sha256=r["sha256"], uploader=r["uploader"], created_at=r["created_at"])
+                for r in rows]
 
     def post(self, sender, body, to=None, kind="message", task_id=None, project=None, title=None,
              reply_to=None, thread_id=None, request_id=None, files=None):

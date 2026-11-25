@@ -29,9 +29,25 @@ FAKE_CLI = textwrap.dedent('''
     if "FAKE:SLEEP" in prompt: time.sleep(60)
     if "FAKE:FAIL" in prompt: print("boom"); sys.exit(3)
     if "FAKE:BLOCK" in prompt: print("Thử rồi.\\nSTATUS: BLOCKED: thiếu khoá API"); sys.exit(0)
+    if "FAKE:OUTBOX" in prompt:
+        import re
+        box = re.search(r"đặt tệp vào thư mục: (.+)", prompt).group(1).strip()
+        open(os.path.join(box, "shot.png"), "wb").write(b"\\x89PNG\\r\\n\\x1a\\n" + b"0" * 40)
+        open(os.path.join(box, ".secret"), "w").write("hidden")
+        open(os.path.join(box, "empty.txt"), "w").close()
+        os.symlink("/etc/hostname", os.path.join(box, "link.txt"))
+        out.append("Đã chụp ảnh.")
     if "FAKE:ENVFAIL" in prompt: print("Failed to create unified exec process: timed out after 15000ms connecting runner pipe-in"); sys.exit(0)
     if "FAKE:ECHO" in prompt: out.append(prompt)
     if "FAKE:SILENT" in prompt: print("SILENT"); sys.exit(0)
+    if "FAKE:WARNSILENT" in prompt:
+        print("Claude Code doesn't recognize the model 'qwen3-coder:30b', so it assumes a context window of 1m tokens.")
+        print("[claude-code:unrecognized_model] {'model':'qwen3-coder:30b'}")
+        print("SILENT"); sys.exit(0)
+    if "FAKE:WARN" in prompt:
+        print("Claude Code doesn't recognize the model 'qwen3-coder:30b', so it assumes a context window of 1m tokens.")
+        print("[claude-code:unrecognized_model] {'model':'qwen3-coder:30b'}")
+        print("Đã xong: tạo mines.html"); sys.exit(0)
     if "FAKE:LONG" in prompt: out.append("x" * 5000)
     if "FAKE:TOKEN" in prompt: out.append("token ah1_" + "x" * 30)
     if "FAKE:CWD" in prompt: out.append("CWD=" + os.path.basename(os.getcwd()))
@@ -62,7 +78,8 @@ class RunnerTests(unittest.TestCase):
         self.board = hub_tasks.board_for(self.hub)
         self.enterContext(patch.object(api_v1, "_hub", self.hub))
         self.enterContext(patch.dict(os.environ, {"AI_HUB_INTERNAL_TOKEN": self.admin,
-                                                  "AI_HUB_TOKEN_CODEX": self.tokens["codex"]}))
+                                                  "AI_HUB_TOKEN_CODEX": self.tokens["codex"],
+                                                  "AI_HUB_FILES_DIR": str(self.dir / "hub-files")}))
         self.enterContext(patch.object(ai_hub.Handler, "log_message"))
         server = self.enterContext(ThreadingHTTPServer(("127.0.0.1", 0), ai_hub.Handler))
         threading.Thread(target=server.serve_forever, kwargs={"poll_interval": .01}, daemon=True).start()
@@ -188,6 +205,54 @@ class RunnerTests(unittest.TestCase):
         self.runner(output_filter="codex").step()
         self.assertEqual(self.inbox("muse", "handoff")[0]["body"], "Xong thật")
 
+    # ------------------------------------------------------------------ đính kèm
+    def test_files_in_outbox_are_uploaded_and_attached(self):
+        self.new_task("FAKE:OUTBOX")
+        runner = self.runner()
+        runner.identify()
+        runner.step()
+        handoff = self.inbox("muse", "handoff")[0]
+        self.assertEqual([f["name"] for f in handoff["files"]], ["shot.png"])
+        self.assertIn("Không đính kèm", handoff["body"])  # link.txt (symlink) và empty.txt bị từ chối
+        self.assertNotIn(".secret", json.dumps(handoff["files"]))
+        self.assertEqual(len(self.hub.list_files()), 1)
+        self.assertFalse((self.work / ".aihub-outbox").exists())  # dọn sạch thư mục tạm trong dự án
+        self.assertTrue(list((self.dir / "runs" / "codex").glob("*.files/*shot.png")))
+
+    def test_upload_failure_retries_without_rerunning_or_duplicating(self):
+        self.new_task("FAKE:OUTBOX")
+        runner = self.runner()
+        real, failed = runner.client.upload, []
+
+        def flaky(source, name=None):
+            if not failed:
+                failed.append(1)
+                raise OSError("hub down")
+            return real(source, name)
+
+        runner.client.upload = flaky
+        with self.assertRaises(OSError):
+            runner.step()
+        self.assertEqual((self.runs(), self.board.get("G1")["status"]), (1, "in_progress"))
+        self.assertEqual(runner.step(), 1)
+        self.assertEqual((self.runs(), self.board.get("G1")["status"], len(self.hub.list_files())), (1, "in_review", 1))
+
+    def test_rejected_attachment_is_reported_not_fatal(self):
+        self.new_task("FAKE:OUTBOX")
+        runner = self.runner()
+        runner.client.upload = lambda source, name=None: {"ok": False, "error": "QUOTA_EXCEEDED", "message": "Kho đầy"}
+        runner.step()
+        self.assertEqual(self.board.get("G1")["status"], "in_review")
+        handoff = self.inbox("muse", "handoff")[0]
+        self.assertIn("Kho đầy", handoff["body"])
+        self.assertNotIn("files", handoff)
+
+    def test_outbox_can_be_disabled(self):
+        self.new_task("FAKE:OUTBOX")
+        self.runner(outbox=False).step()
+        self.assertFalse(list(self.work.glob(".aihub-outbox*")))
+        self.assertEqual(self.hub.list_files(), [])
+
     # --------------------------------------------------------------------- review
     def reviewed_task(self, marker):
         self.board.create("anh", "Việc cần review", "muse", reviewer="codex", task_id="R1", description="x " + marker)
@@ -238,6 +303,21 @@ class RunnerTests(unittest.TestCase):
 
     def test_silent_reply_posts_nothing(self):
         self.hub.post("anh", "Cảm ơn nhé FAKE:SILENT", to="codex")
+        self.runner().step()
+        self.assertEqual(self.inbox("anh"), [])
+
+    def test_cli_startup_warnings_are_stripped_from_replies(self):
+        self.hub.post("anh", "làm gì đó FAKE:WARN", to="codex")
+        self.runner().step()
+        body = self.inbox("anh", "message")[0]["body"]
+        self.assertEqual(body, "Đã xong: tạo mines.html")
+        self.assertNotIn("doesn't recognize", body)
+        self.assertNotIn("unrecognized_model", body)
+        log = (self.dir / "runs" / "codex" / ("%d.log" % self.inbox("codex")[0]["id"])).read_text(encoding="utf-8")
+        self.assertIn("doesn't recognize", log)  # bản thô vẫn giữ để tra cứu
+
+    def test_warning_plus_silent_posts_nothing(self):
+        self.hub.post("anh", "Cảm ơn nhé FAKE:WARNSILENT", to="codex")
         self.runner().step()
         self.assertEqual(self.inbox("anh"), [])
 
@@ -349,6 +429,14 @@ class RunnerTests(unittest.TestCase):
         raw = "OpenAI Codex v1\nuser\nlàm việc A\nthinking\nsuy nghĩ\nexec\nls\ncodex\nXong A.\nCòn B.\ntokens used 99\n"
         self.assertEqual(agent_runner.extract_codex_reply(raw), "Xong A.\nCòn B.")
         self.assertEqual(agent_runner.extract_codex_reply("chỉ có chữ thường"), "chỉ có chữ thường")
+
+    def test_strip_cli_warnings(self):
+        warn = ('Claude Code doesn\'t recognize the model "qwen3-coder:30b", so it assumes a context window of 1m tokens. '
+                'Update Claude Code, or see https://code.claude.com/docs/en/model-config#correct-the-window-for-a-gateway-or-custom-model-id to set the window.\n'
+                '[claude-code:unrecognized_model] {"model":"qwen3-coder:30b","query_source":"sdk"}')
+        self.assertEqual(agent_runner.strip_cli_warnings(warn + "\nĐã xong việc."), "Đã xong việc.")
+        self.assertEqual(agent_runner.strip_cli_warnings(warn + "\nSILENT"), "SILENT")
+        self.assertEqual(agent_runner.strip_cli_warnings("Không có cảnh báo."), "Không có cảnh báo.")
 
     def test_main_once_end_to_end(self):
         self.new_task()
