@@ -18,6 +18,7 @@ MODES = frozenset({"push", "pull"})
 RESERVED_IDS = frozenset({"all", "anh", "system", "admin"})
 MAX_BODY = 20000
 MAX_AGENT_TURNS = 8
+LEGACY_THREAD = "legacy"
 AGENT_ID_RE = re.compile(r"^[a-z][a-z0-9_-]{1,31}$")
 TOKEN_PREFIX = "ah1_"
 
@@ -104,6 +105,13 @@ class HubDB:
             CREATE INDEX IF NOT EXISTS ix_messages_thread ON messages(thread_id, id);
             CREATE INDEX IF NOT EXISTS ix_recipients_agent ON msg_recipients(agent, message_id);
         """)
+        self._migrate()
+
+    def _migrate(self):
+        """Nâng cấp DB cũ tại chỗ: thêm cột `legacy` (tin nhập từ hộp thư cũ, chỉ để xem lịch sử)."""
+        columns = {r["name"] for r in self.db.execute("PRAGMA table_info(messages)")}
+        if "legacy" not in columns:
+            self.db.execute("ALTER TABLE messages ADD COLUMN legacy INTEGER NOT NULL DEFAULT 0")
 
     # ------------------------------------------------------------------ agents
     def _agent_row(self, row, show_online=True):
@@ -186,6 +194,8 @@ class HubDB:
                 message[key] = row[key]
         if row["files"]:
             message["files"] = json.loads(row["files"])
+        if row["legacy"]:
+            message["legacy"] = True
         return message
 
     FILE_ID_RE = re.compile(r"^[0-9a-f]{32}$")
@@ -237,11 +247,27 @@ class HubDB:
 
     def delete_file_row(self, file_id):
         with self._lock:
-            return self.db.execute("DELETE FROM files WHERE id=?", (file_id,)).rowcount
+            removed = self.db.execute("DELETE FROM files WHERE id=?", (file_id,)).rowcount
+            # tin đã gắn tệp này: đánh dấu "đã xoá" để giao diện không hiện liên kết chết
+            for row in self.db.execute("SELECT id, files FROM messages WHERE files LIKE ?",
+                                       ("%" + file_id + "%",)).fetchall():
+                items = json.loads(row["files"])
+                for item in items:
+                    if item.get("id") == file_id:
+                        item["deleted"] = True
+                self.db.execute("UPDATE messages SET files=? WHERE id=?",
+                                (json.dumps(items, ensure_ascii=False), row["id"]))
+            return removed
 
     def files_total_size(self):
         with self._lock:
             return self.db.execute("SELECT COALESCE(SUM(size),0) FROM files").fetchone()[0]
+
+    def files_older_than(self, cutoff_iso):
+        with self._lock:
+            rows = self.db.execute("SELECT * FROM files WHERE created_at < ? ORDER BY created_at, id",
+                                   (cutoff_iso,)).fetchall()
+        return [dict(self.file_public(r), uploader=r["uploader"], created_at=r["created_at"]) for r in rows]
 
     def list_files(self, limit=100):
         with self._lock:
@@ -260,6 +286,8 @@ class HubDB:
         request_id = _text(request_id, "request_id", 64)
         if kind not in KINDS:
             raise HubError("kind phải là một trong: %s." % ", ".join(sorted(KINDS)))
+        if (thread_id or "").lower() == LEGACY_THREAD or (task_id or "").lower() == LEGACY_THREAD:
+            raise HubError("'%s' là luồng dành riêng cho lịch sử hộp thư cũ." % LEGACY_THREAD)
         if reply_to is not None and (not isinstance(reply_to, int) or isinstance(reply_to, bool) or reply_to < 1):
             raise HubError("reply_to phải là id tin (số nguyên).")
         files = self._files(files)
@@ -346,7 +374,7 @@ class HubDB:
         after, limit = self._after(after), self._limit(limit)
         with self._lock:
             rows = self.db.execute(
-                "SELECT m.* FROM messages m WHERE m.id>? AND m.sender<>? AND EXISTS("
+                "SELECT m.* FROM messages m WHERE m.id>? AND m.legacy=0 AND m.sender<>? AND EXISTS("
                 "SELECT 1 FROM msg_recipients r WHERE r.message_id=m.id AND r.agent IN (?, 'all'))"
                 " ORDER BY m.id LIMIT ?", (after, agent_id, agent_id, limit)).fetchall()
             return [self._message(r) for r in rows]
@@ -358,6 +386,8 @@ class HubDB:
         if thread_id:
             clauses.append("thread_id=?")
             args.append(thread_id)
+        else:
+            clauses.append("legacy=0")  # lịch sử hộp thư cũ chỉ hiện khi xin riêng (thread_id=legacy)
         where = " WHERE " + " AND ".join(clauses)
         with self._lock:
             if tail is not None:

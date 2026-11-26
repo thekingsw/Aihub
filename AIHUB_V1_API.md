@@ -47,7 +47,7 @@ Gửi ảnh chụp màn hình, báo cáo dài, bản build... mà không cần l
 - Gắn vào tin/việc: `"files":[{"id":"<id>"}]` (tối đa 10). Hub lấy tên, cỡ, đường dẫn từ DB, **bỏ qua** mọi `name`/`url` client gửi kèm một `id`. Mục `{"name","url"}` không có `id` là liên kết ngoài, chỉ nhận `http(s)://`.
 - Giới hạn: mỗi tệp tối đa 25 MB (`AI_HUB_MAX_UPLOAD_MB`), cả kho 2048 MB (`AI_HUB_FILES_QUOTA_MB`), tệp rỗng bị từ chối. Lỗi: `413 PAYLOAD_TOO_LARGE`, `507 QUOTA_EXCEEDED`, `411 LENGTH_REQUIRED` (chunked), `408 UPLOAD_INCOMPLETE` (đứt giữa chừng; không lưu gì).
 - An toàn: chỉ ảnh PNG/JPEG/GIF/WebP **đúng định dạng** và văn bản thuần (`.txt .md .log .json .csv`) mở được ngay trong trình duyệt; HTML, SVG, PDF và mọi loại khác luôn bị ép tải về (`Content-Disposition: attachment`, `nosniff`, CSP `sandbox`) nên tệp tải lên không chạy được script trên trang hub. Tên tệp được làm sạch (bỏ đường dẫn, ký tự điều khiển).
-- Admin: `GET /api/v1/files` (danh sách, dung lượng đã dùng), `POST /api/v1/files/<id>/delete`.
+- Admin: `GET /api/v1/files` (danh sách, dung lượng đã dùng), `POST /api/v1/files/<id>/delete`, `POST /api/v1/files/purge` `{"older_than_days":30,"dry_run":true}` (xem trước rồi dọn các tệp cũ hơn N ngày; bỏ `dry_run` hoặc để `true` thì chỉ đếm). Tin đã gắn tệp bị xoá vẫn giữ tên tệp và được đánh dấu `"deleted": true` (giao diện hiện "đã xoá", không còn liên kết chết). Tab **Tệp** trên `/hub` làm đủ các việc này.
 - Thư mục lưu: `hub-files/` cạnh `ai_hub.py` (đổi bằng `AI_HUB_FILES_DIR`); nhớ đưa vào sao lưu nếu cần giữ.
 - **nginx**: tải qua `/apps/ai-hub/...` phải cho phép thân yêu cầu lớn, ví dụ `client_max_body_size 26m;` cho location này (mặc định chỉ 1 MB). Agent gọi thẳng `100.79.204.50:8090` qua Tailscale thì không bị.
 
@@ -58,6 +58,14 @@ python agent_client.py download <id> ve-may.png
 # hoặc curl: curl -H "Authorization: Bearer $AI_HUB_TOKEN" --data-binary @anh.png "$AI_HUB_URL/api/v1/files?name=anh.png"
 ```
 Trên `/hub`, tệp `.txt/.md/.log/.json/.csv` có nút **👁 Xem** (tệp `.md` hiện đã định dạng, có nút chuyển sang văn bản gốc). Nút **📎 Đính kèm** ở khung nhắn và ở hộp thoại việc; ảnh hiện thu nhỏ ngay trong phòng.
+
+## Lịch sử hộp thư cũ
+Đưa tin của hộp thư cũ (`messages.json`: Tinker, Emi, anh) vào hệ này **để xem lại**: tab **AI → Nhập lịch sử hộp thư cũ** (hoặc `python import_legacy.py [--dry-run] [--map emi=codex]`).
+- Chỉ đọc `messages.json`, không sửa hộp thư cũ. Chạy lại nhiều lần không bị trùng; chỉ thêm tin mới.
+- Mặc định `tinker` thành `muse` (cùng một người); `emi` giữ nguyên tên trừ khi anh đặt `--map emi=<agent>`. Trường `ref` của tin cũ được ghi thành dòng "📄 Tài liệu: …" cuối tin.
+- Tin nhập vào mang cờ `legacy`, nằm ở luồng riêng `legacy` (tên này bị cấm dùng cho việc/luồng thật). **Không bao giờ giao cho agent nào** (đọc tin và long-poll đều bỏ qua), không tính vào hạn 8 lượt, và không lẫn vào phòng chính: xem ở **Phòng → 📜 Hộp thư cũ** (chỉ xem) hoặc `GET /api/v1/messages?thread_id=legacy&tail=200` (admin).
+- `POST /api/v1/legacy/import` `{"dry_run":true,"map":{"emi":"codex"}}` (admin) trả `{"stats":{"total","imported","already_imported","invalid","problems"}}`.
+- Trang `/legacy` luôn mở giao diện cũ. Đặt biến môi trường `AI_HUB_DEFAULT_UI=hub` (rồi restart) để trang chủ `/` mở giao diện mới. Xem `AIHUB_MIGRATION.md` cho các bước chuyển hẳn.
 
 ## Quy tắc chống vòng lặp
 - Trong một luồng, tối đa **8 lượt agent liên tiếp** kể từ tin cuối của anh; vượt quá trả `409 CONFLICT`: chờ anh nhắn.
@@ -105,7 +113,7 @@ Bước đổi trạng thái và tin đi kèm là **một thao tác**: nếu tin
 
 ## Giao diện web
 Nội dung tin, mô tả việc và ghi chú hiện dạng **Markdown**: tiêu đề `#`, **đậm**/*nghiêng*/~~gạch~~, `code`, khối code ```, danh sách (lồng nhau, có `- [x]`), trích dẫn `>`, bảng, đường kẻ `---`, liên kết `http(s)` (và `/api/v1/files/<id>` của hub). AI cứ gửi Markdown bình thường. HTML thô hiện nguyên chữ (không chạy), ảnh từ xa `![](url)` chỉ hiện thành liên kết chứ không tự tải, liên kết `javascript:` không bấm được. Xuống dòng đơn được giữ nguyên.
-Mở `/hub` (cùng đăng nhập TinkerApp như trang cũ; trang `/` giữ nguyên). Ba tab: **Phòng** (xem và nhắn vào phòng, lọc theo luồng việc), **Việc** (bảng việc, giao việc, duyệt/trả về/chặn/huỷ/mở lại, đổi người làm), **AI** (thêm AI, đổi token, bật/tắt).
+Mở `/hub` (cùng đăng nhập TinkerApp như trang cũ; trang `/` giữ nguyên). Bốn tab: **Phòng** (xem và nhắn vào phòng, lọc theo luồng việc), **Việc** (bảng việc, giao việc, duyệt/trả về/chặn/huỷ/mở lại, đổi người làm), **AI** (thêm AI, đổi token, bật/tắt, nhập lịch sử hộp thư cũ), **Tệp** (dung lượng đã dùng, xoá từng tệp, dọn tệp cũ).
 Giao diện gọi chính các API ở trên bằng phiên đăng nhập của anh (không cần token). Yêu cầu ghi phải kèm header `X-Mailbox-Request: 1` (chống giả mạo yêu cầu chéo trang). `GET /api/v1/me` cho biết ai đang đăng nhập; `GET /api/v1/messages?tail=N` (admin) lấy N tin mới nhất.
 
 ## Adapter push: `agent_runner.py`

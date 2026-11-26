@@ -10,6 +10,7 @@ import os
 import secrets
 import time
 import unicodedata
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from hub_db import HubError, NotFound
@@ -143,6 +144,25 @@ class FileStore:
         except OSError:
             pass
         return row
+
+
+def _purge(self, older_than_days, dry_run=True):
+    """Xoá tệp đã upload quá N ngày (mặc định chỉ xem trước). Tin đã gắn tệp được đánh dấu "đã xoá"."""
+    if not isinstance(older_than_days, int) or isinstance(older_than_days, bool) or not 1 <= older_than_days <= 3650:
+        raise HubError("older_than_days phải là số nguyên từ 1 đến 3650.")
+    cutoff = (datetime.now(timezone.utc) - timedelta(days=older_than_days)).isoformat(timespec="seconds")
+    victims = self.hub.files_older_than(cutoff)
+    if not dry_run:
+        for victim in victims:
+            try:
+                self.delete(victim["id"])
+            except NotFound:
+                pass
+    return {"dry_run": bool(dry_run), "count": len(victims), "bytes": sum(v["size"] for v in victims),
+            "files": victims[:50]}
+
+
+FileStore.purge = _purge
 
 
 def files_dir():

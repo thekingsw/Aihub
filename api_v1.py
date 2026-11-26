@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, quote, urlparse
 
 import hub_db
 import hub_files
+import hub_legacy
 import hub_tasks
 from hub_db import HubError, Forbidden, NotFound
 
@@ -19,6 +20,7 @@ BASE = os.path.dirname(os.path.abspath(__file__))
 MAX_REQUEST = 256 * 1024
 MAX_WAIT = 25.0
 _hub = None
+legacy_rows = None   # ai_hub gắn hàm đọc hộp thư cũ vào đây; None nghĩa là không có
 _hub_lock = threading.Lock()
 
 
@@ -217,6 +219,21 @@ def _post(handler, path, query):
                                           data.get("role", ""), data.get("poll_interval", 300))
         return {"ok": True, "agent": agent, "token": token,
                 "note": "Token chỉ hiện một lần; hãy lưu ngay."}, 201
+    if path == "/api/v1/files/purge":
+        data = _read_json(handler)
+        return {"ok": True, "result": hub_files.store_for(hub).purge(data.get("older_than_days"),
+                                                                      data.get("dry_run", True) is not False)}
+    if path == "/api/v1/legacy/import":
+        data = _read_json(handler)
+        if legacy_rows is None:
+            raise HubError("Máy chủ này không có hộp thư cũ để nhập.", 501, "NOT_IMPLEMENTED")
+        mapping = hub_legacy.parse_map(["%s=%s" % (k, v) for k, v in (data.get("map") or {}).items()])
+        try:
+            rows = legacy_rows()
+        except (OSError, ValueError) as exc:
+            raise HubError("Không đọc được hộp thư cũ: %s" % exc, 500, "LEGACY_UNREADABLE") from None
+        return {"ok": True, "stats": hub_legacy.import_rows(hub, rows, mapping, bool(data.get("dry_run"))),
+                "mapping": mapping}
     match = re.fullmatch(r"/api/v1/files/([0-9a-f]{32})/delete", path)
     if match:
         row = hub_files.store_for(hub).delete(match.group(1))

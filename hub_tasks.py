@@ -111,8 +111,8 @@ class TaskBoard:
                 while self.db.execute("SELECT 1 FROM tasks WHERE id=?", (task_id,)).fetchone():
                     last += 1
                     task_id = "T-%04d" % (last + 1)
-            elif not isinstance(task_id, str) or not TASK_ID_RE.match(task_id):
-                raise HubError("id việc phải khớp ^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$.")
+            elif not isinstance(task_id, str) or not TASK_ID_RE.match(task_id) or task_id.lower() == "legacy":
+                raise HubError("id việc phải khớp ^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$ (và không phải 'legacy').")
             now = _now()
             self._begin()
             try:

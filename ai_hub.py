@@ -32,6 +32,7 @@ HISTORY_PATH = os.path.join(BASE, "history.json")
 PORT = int(os.environ.get("AI_HUB_PORT", "8090"))
 HOST = os.environ.get("AI_HUB_HOST", "100.79.204.50")
 MAILBOX = MessageStore(os.path.join(BASE, "messages.json"))
+api_v1.legacy_rows = MAILBOX.read  # P6: nhập lịch sử hộp thư cũ vào /hub
 
 AI_DEFS = {
     "chatgpt": {"name": "ChatGPT", "api": "openai", "default_model": "gpt-6.1-sol", "enabled": True},
@@ -404,7 +405,7 @@ class Handler(BaseHTTPRequestHandler):
     def _require_session(self):
         if self._authenticated():
             return True
-        if self.command == "GET" and urlparse(self.path).path in {"/", "/index.html", "/hub", "/hub.html"}:
+        if self.command == "GET" and urlparse(self.path).path in {"/", "/index.html", "/hub", "/hub.html", "/legacy"}:
             self._login_page("Mở TinkerApp để đăng nhập và lấy mã dùng một lần.")
         else:
             self._json({"ok": False, "error": "UNAUTHENTICATED"}, 401)
@@ -501,7 +502,10 @@ class Handler(BaseHTTPRequestHandler):
             return
         if not self._require_session():
             return
-        if self.path == "/" or self.path.startswith("/index.html"):
+        # AI_HUB_DEFAULT_UI=hub: trang chủ "/" mở giao diện mới; giao diện cũ vẫn chạy ở /legacy
+        is_root = self.path == "/" or self.path.startswith("/index.html")
+        default_hub = os.environ.get("AI_HUB_DEFAULT_UI", "").strip().lower() == "hub"
+        if self.path == "/legacy" or (is_root and not default_hub):
             try:
                 with open(os.path.join(BASE, "room.html"), "rb") as f:
                     data = f.read()
@@ -514,7 +518,7 @@ class Handler(BaseHTTPRequestHandler):
             self.end_headers()
             self.wfile.write(data)
             return
-        if u.path in {"/hub", "/hub.html"}:
+        if u.path in {"/hub", "/hub.html"} or (is_root and default_hub):
             try:
                 with open(os.path.join(BASE, "hub.html"), "rb") as f:
                     data = f.read()
