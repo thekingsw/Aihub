@@ -236,6 +236,9 @@ class TaskBoard:
         elif target == "cancelled":
             kind, recipients = "notice", to(task["assignee"])
             body = "ĐÃ HUỶ. " + note
+        elif source == "blocked" and target == "in_progress":
+            kind, recipients = "task", to(task["assignee"])
+            body = "MỞ CHẶN. " + (note or task["title"])
         elif source in TERMINAL and target == "in_progress":
             kind, recipients = "task", to(task["assignee"])
             body = "MỞ LẠI. " + (note or task["title"])

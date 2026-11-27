@@ -119,6 +119,17 @@ class BoardTests(unittest.TestCase):
         self.assertEqual(reopened["status"], "in_progress")
         self.assertTrue([m for m in self.hub.read_for("codex") if m["body"].startswith("MỞ LẠI")])
 
+    def test_unblock_notifies_assignee(self):
+        self.new()
+        self.board.transition("codex", "GAME-1", "blocked", note="Provider 403")
+        before = len(self.hub.read_for("codex"))
+        self.board.transition("anh", "GAME-1", "in_progress", note="Đã sửa quyền thư mục")
+        fresh = self.hub.read_for("codex")[before:]
+        self.assertEqual(len(fresh), 1)
+        self.assertEqual(fresh[0]["kind"], "task")
+        self.assertTrue(fresh[0]["body"].startswith("MỞ CHẶN"))
+        self.assertIn("Đã sửa quyền thư mục", fresh[0]["body"])
+
     def test_blocked_and_cancel(self):
         self.new()
         with self.assertRaises(HubError):
