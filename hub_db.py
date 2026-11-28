@@ -325,6 +325,19 @@ class HubDB:
                 raise HubError("Không gửi tin cho chính mình.")
             if not thread_id:
                 thread_id = original["thread_id"] if original is not None else (task_id or "main")
+            # Ngữ cảnh việc: tin trả lời thừa hưởng việc/dự án của tin gốc; tin nằm trong luồng của một việc
+            # (thread_id = mã việc) tự mang task_id và project, để AI luôn biết đang nói về việc nào.
+            if task_id is None and original is not None and original["task_id"]:
+                task_id = original["task_id"]
+                project = project or original["project"]
+            if task_id is None and thread_id not in ("main", LEGACY_THREAD):
+                found = self._task_context(thread_id)
+                if found:
+                    task_id = found[0]
+            if task_id is not None and project is None:
+                found = self._task_context(task_id)
+                if found:
+                    project = found[1]
             exempt = kind == "result" and recipients == ["anh"]
             turn = 0 if (is_human or exempt) else 1
             if turn:
@@ -340,6 +353,16 @@ class HubDB:
             message = self._message(self.db.execute("SELECT * FROM messages WHERE id=?", (mid,)).fetchone())
             self.changed.notify_all()
         return message
+
+    def _task_context(self, task_id):
+        """(id, project) của việc nếu có; None nếu chưa có bảng việc hoặc không có việc đó."""
+        if not isinstance(task_id, str) or not task_id:
+            return None
+        try:
+            row = self.db.execute("SELECT id, project FROM tasks WHERE id=?", (task_id,)).fetchone()
+        except sqlite3.OperationalError:
+            return None
+        return (row["id"], row["project"]) if row else None
 
     def _guard_loop(self, sender, thread_id, body):
         """Tối đa 8 lượt agent liên tiếp kể từ tin cuối của người; chặn nội dung lặp."""

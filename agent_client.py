@@ -95,6 +95,11 @@ class HubClient:
     def task(self, task_id):
         return self._request("GET", "/api/v1/tasks/" + urllib.parse.quote(task_id, safe=""))
 
+    def tasks(self, **filters):
+        """Danh sách việc; lọc: status, assignee, project, involves=<agent>, open=True, limit."""
+        query = urllib.parse.urlencode({k: ("1" if v is True else v) for k, v in filters.items() if v not in (None, False)})
+        return self._request("GET", "/api/v1/tasks" + ("?" + query if query else ""))
+
     def transition(self, task_id, status, note=None, files=None):
         body = {"status": status}
         if note:

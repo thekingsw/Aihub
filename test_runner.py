@@ -205,6 +205,64 @@ class RunnerTests(unittest.TestCase):
         self.runner(output_filter="codex").step()
         self.assertEqual(self.inbox("muse", "handoff")[0]["body"], "Xong thật")
 
+    # ---------------------------------------------------- AI biết mình được hỏi về việc nào
+    def chat_prompt_for(self, **post):
+        """Gửi tin chat cho codex (kèm FAKE:ECHO để AI giả in lại prompt) và trả về prompt nhận được."""
+        self.hub.post("anh", post.pop("body", "") + " FAKE:ECHO", to="codex", **post)
+        runner = self.runner(max_summary_chars=20000)
+        runner.step()
+        return [m for m in self.hub.read_for("anh") if m["kind"] == "message"][-1]["body"]
+
+    def settle(self, *task_ids):
+        runner = self.runner(state="settle")
+        runner.step()  # xử lý hết tin giao việc để chỉ còn tin chat cần thử
+        return runner
+
+    def test_chat_in_task_thread_includes_the_job(self):
+        self.new_task(project="retro")
+        self.settle()
+        prompt = self.chat_prompt_for(body="Nút cờ vẫn lỗi", thread_id="G1")
+        self.assertIn("luồng của việc #G1 (Làm game), dự án retro", prompt)
+        self.assertIn("## Việc liên quan #G1", prompt)
+
+    def test_chat_in_main_room_lists_open_jobs_and_forbids_guessing(self):
+        self.new_task(task_id="A", project="retro")
+        self.new_task(task_id="B", project="kpi", reviewer=None)
+        self.settle()
+        prompt = self.chat_prompt_for(body="Nút cờ vẫn lỗi")
+        self.assertIn("Tin này ở phòng chung, không gắn với việc hay dự án nào", prompt)
+        self.assertIn("- #A [retro] Làm game — chờ review (bạn làm)", prompt)
+        self.assertIn("- #B [kpi] Làm game — chờ review (bạn làm)", prompt)
+        self.assertIn("KHÔNG đoán", prompt)
+
+    def test_project_scoped_chat_shows_only_that_projects_jobs(self):
+        self.new_task(task_id="A", project="retro")
+        self.new_task(task_id="B", project="kpi", reviewer=None)
+        self.settle()
+        prompt = self.chat_prompt_for(body="Tiến độ sao rồi?", project="retro")
+        self.assertIn("nói về dự án retro", prompt)
+        self.assertIn("#A [retro]", prompt)
+        self.assertNotIn("#B [kpi]", prompt)
+
+    def test_digest_includes_review_duties_and_skips_closed_jobs(self):
+        self.board.create("anh", "Việc cần review", "muse", reviewer="codex", task_id="R1", project="retro", description="x")
+        self.board.transition("muse", "R1", "in_progress")
+        self.board.transition("muse", "R1", "in_review", note="xong")
+        self.new_task(task_id="D1", project="retro")
+        self.board.transition("anh", "D1", "cancelled", note="bỏ")
+        prompt = self.chat_prompt_for(body="Cho em hỏi chung")
+        self.assertIn("#R1 [retro] Việc cần review — chờ review (bạn review)", prompt)
+        self.assertNotIn("#D1", prompt)
+
+    def test_task_context_falls_back_to_thread_id(self):
+        self.new_task(project="retro")
+        self.settle()
+        msg = self.hub.post("anh", "hỏi FAKE:ECHO", to="codex", thread_id="G1")
+        bare = {k: v for k, v in msg.items() if k not in ("task_id", "project")}  # như tin cũ chưa có ngữ cảnh
+        self.runner(state="fb", max_summary_chars=20000).process(bare)
+        reply = [m for m in self.hub.read_for("anh") if m["kind"] == "message"][-1]["body"]
+        self.assertIn("luồng của việc #G1", reply)
+
     # ------------------------------------------------------------------ đính kèm
     def test_files_in_outbox_are_uploaded_and_attached(self):
         self.new_task("FAKE:OUTBOX")

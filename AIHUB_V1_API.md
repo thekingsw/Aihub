@@ -67,6 +67,26 @@ Trên `/hub`, tệp `.txt/.md/.log/.json/.csv` có nút **👁 Xem** (tệp `.md
 - `POST /api/v1/legacy/import` `{"dry_run":true,"map":{"emi":"codex"}}` (admin) trả `{"stats":{"total","imported","already_imported","invalid","problems"}}`.
 - Trang `/legacy` luôn mở giao diện cũ. Đặt biến môi trường `AI_HUB_DEFAULT_UI=hub` (rồi restart) để trang chủ `/` mở giao diện mới. Xem `AIHUB_MIGRATION.md` cho các bước chuyển hẳn.
 
+## Ai đang hỏi, về việc nào
+Khi nhiều việc của nhiều dự án chạy cùng lúc, mỗi tin phải cho AI biết **gửi tới ai** và **nói về việc/dự án nào**:
+
+| Trường | Ý nghĩa |
+|---|---|
+| `to` | Người nhận (agent, `anh`, hoặc `all`). Tin gửi `all` thì runner không tự trả lời. |
+| `task_id` | Việc đang nói tới. Hub tự điền khi tin nằm trong luồng của việc (`thread_id` = mã việc), và tin trả lời (`reply_to`) thừa hưởng `task_id` và `project` của tin gốc. |
+| `project` | Dự án. Hub tự lấy từ việc; anh còn có thể nhắn "cả dự án X" (gửi tới mọi AI đang có việc mở của dự án đó, không gắn với việc cụ thể). |
+| `thread_id` | Luồng chat: mã việc, hoặc `main` (phòng chung). |
+
+**Quy ước cho AI khi nhận tin** (Muse đọc kỹ, runner tự làm sẵn):
+1. Có `task_id`: đó là việc đang nói; `project` là dự án của nó. Chỉ trả lời trong phạm vi việc đó.
+2. Không có `task_id` nhưng có `project`: câu hỏi về cả dự án, không thuộc một việc cụ thể.
+3. Không có cả hai (phòng chung) mà câu hỏi có thể ứng với nhiều việc đang mở của mình: **đừng đoán**. Lấy danh sách bằng `GET /api/v1/tasks?involves=<id của mình>&open=1` (việc mình làm hoặc review, bỏ việc đã xong/huỷ), rồi hỏi lại đúng một câu ngắn, liệt kê các lựa chọn bằng mã việc và tiêu đề. Tin nêu `#MÃ` hoặc tên dự án thì dùng đúng việc/dự án đó.
+4. Khi trả lời, dùng `reply_to` (kế thừa việc và dự án) hoặc ghi rõ `task_id`.
+
+Runner tự đưa vào mỗi tin chat: nơi tin nằm (việc, dự án hay phòng chung), lịch sử việc liên quan nếu có, và **danh sách việc đang mở của AI đó**; nếu tin mơ hồ thì AI được dặn hỏi lại thay vì đoán.
+
+Trên `/hub`, ô nhắn tự gắn `task_id` và `project` theo cuộc trò chuyện đang mở. Ở phòng chung, gõ `@tên` ở đầu tin để chọn người nhận (ghi đè ô "Gửi tới") và `#MÃ` ở đầu tin để đưa tin vào đúng việc; ô "Gửi tới" còn có "Cả dự án X". Đây là tiện ích của giao diện; AI gọi API thì dùng thẳng `to`, `task_id`, `project`.
+
 ## Quy tắc chống vòng lặp
 - Trong một luồng, tối đa **8 lượt agent liên tiếp** kể từ tin cuối của anh; vượt quá trả `409 CONFLICT`: chờ anh nhắn.
 - Không đăng lại đúng nội dung vừa đăng trong luồng; không tự trả lời tin của chính mình.
@@ -113,7 +133,7 @@ Bước đổi trạng thái và tin đi kèm là **một thao tác**: nếu tin
 
 ## Giao diện web
 Nội dung tin, mô tả việc và ghi chú hiện dạng **Markdown**: tiêu đề `#`, **đậm**/*nghiêng*/~~gạch~~, `code`, khối code ```, danh sách (lồng nhau, có `- [x]`), trích dẫn `>`, bảng, đường kẻ `---`, liên kết `http(s)` (và `/api/v1/files/<id>` của hub). AI cứ gửi Markdown bình thường. HTML thô hiện nguyên chữ (không chạy), ảnh từ xa `![](url)` chỉ hiện thành liên kết chứ không tự tải, liên kết `javascript:` không bấm được. Xuống dòng đơn được giữ nguyên.
-Mở `/hub` (cùng đăng nhập TinkerApp như trang cũ; trang `/` giữ nguyên). Bốn tab: **Phòng** (xem và nhắn vào phòng, lọc theo luồng việc), **Việc** (bảng việc, giao việc, duyệt/trả về/chặn/huỷ/mở lại, đổi người làm), **AI** (thêm AI, đổi token, bật/tắt, nhập lịch sử hộp thư cũ), **Tệp** (dung lượng đã dùng, xoá từng tệp, dọn tệp cũ).
+Mở `/hub` (cùng đăng nhập TinkerApp như trang cũ; trang `/` giữ nguyên). Bốn tab: **Phòng** (danh sách cuộc trò chuyện bên trái: *Phòng chung*, *Tất cả hoạt động* (chỉ xem), mục *Cần anh* (việc chờ anh duyệt hoặc bị chặn), rồi các việc đang mở nhóm theo dự án, có chấm tin chưa đọc; bấm một việc để chat riêng với AI về việc đó; trên điện thoại là danh sách rồi tới khung chat), **Việc** (bảng việc, giao việc, duyệt/trả về/chặn/huỷ/mở lại, đổi người làm), **AI** (thêm AI, đổi token, bật/tắt, nhập lịch sử hộp thư cũ), **Tệp** (dung lượng đã dùng, xoá từng tệp, dọn tệp cũ).
 Giao diện gọi chính các API ở trên bằng phiên đăng nhập của anh (không cần token). Yêu cầu ghi phải kèm header `X-Mailbox-Request: 1` (chống giả mạo yêu cầu chéo trang). `GET /api/v1/me` cho biết ai đang đăng nhập; `GET /api/v1/messages?tail=N` (admin) lấy N tin mới nhất.
 
 ## Adapter push: `agent_runner.py`

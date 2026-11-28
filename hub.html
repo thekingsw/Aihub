@@ -104,6 +104,25 @@ pre.plain{white-space:pre-wrap;overflow-wrap:anywhere;background:var(--chip);bor
 .frow{display:flex;gap:12px;align-items:center;padding:10px 12px;margin-bottom:8px}
 .frow .info{flex:1;min-width:0;overflow-wrap:anywhere}
 .frow img{width:48px;height:48px;object-fit:cover;border-radius:8px;flex:none}
+.room{display:grid;grid-template-columns:290px minmax(0,1fr);gap:12px;flex:1;min-height:0}
+#convlist{overflow-y:auto;overscroll-behavior:contain;padding:6px}
+#convpane{display:flex;flex-direction:column;min-height:0}
+.gh{font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;color:var(--mute);padding:12px 10px 4px}
+.gh.need{color:var(--warn)}
+details.grp>summary{cursor:pointer;min-height:44px;display:flex;align-items:center}
+.conv{display:block;width:100%;text-align:left;background:none;border:0;border-radius:10px;padding:8px 10px;min-height:44px}
+.conv:hover{background:var(--chip)}
+.conv[aria-current=true]{background:var(--chip);box-shadow:inset 3px 0 0 var(--accent)}
+.conv .ct{display:flex;gap:6px;align-items:center;font-weight:600}
+.conv .ct .t{flex:1;min-width:0;overflow-wrap:anywhere}
+.conv .ct .t.need{color:var(--warn)}
+.conv .cs{display:block;font-size:12px;color:var(--mute);overflow-wrap:anywhere}
+.badge2{background:var(--accent);color:var(--accent-ink);border-radius:999px;font-size:11px;font-weight:700;padding:0 7px;min-width:20px;text-align:center;flex:none}
+.chathead{display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:0 0 8px}
+.chathead h2{margin:0;font-size:16px;flex:1 1 180px;min-width:0;overflow-wrap:anywhere}
+#backlist{display:none}
+.ctxline{font-size:12px;color:var(--mute)}
+@media (max-width:760px){.room{grid-template-columns:minmax(0,1fr)}.room[data-pane=chat] #convlist{display:none}.room[data-pane=list] #convpane{display:none}#backlist{display:inline-flex;align-items:center}}
 .thumb{display:block;max-width:100%;max-height:220px;border-radius:8px;border:1px solid var(--line);margin-top:6px}
 input[type=file]{display:none}
 .derr{color:var(--bad);font-size:13px;margin:0}.derr:empty{display:none}
@@ -126,19 +145,24 @@ input[type=file]{display:none}
   <p id="err" role="status"></p>
 
   <section class="view active" id="view-room" role="tabpanel" aria-labelledby="tab-room">
-    <div class="toolbar" id="roomtools" hidden><button class="btn alt" id="legacybtn" type="button">📜 Hộp thư cũ</button></div>
-    <div class="filter" id="filter" hidden></div>
-    <div class="card" id="feed" aria-live="polite"></div>
-    <form class="card" id="composer" autocomplete="off">
-      <textarea id="msg" placeholder="Nhắn vào phòng… (Ctrl+Enter để gửi)" aria-label="Nội dung tin nhắn"></textarea>
-      <div class="row">
-        <label for="to" class="chip">Gửi tới</label>
-        <select id="to" aria-label="Người nhận"></select>
-        <span id="attachslot"></span>
-        <span style="flex:1"></span>
-        <button class="btn" id="send" type="submit">Gửi</button>
+    <div class="room" id="room" data-pane="list">
+      <aside class="card" id="convlist" aria-label="Cuộc trò chuyện"></aside>
+      <div id="convpane">
+        <div class="chathead" id="chathead"></div>
+        <div class="card" id="feed" aria-live="polite"></div>
+        <form class="card" id="composer" autocomplete="off">
+          <div class="ctxline" id="ctxline"></div>
+          <textarea id="msg" placeholder="Nhắn vào phòng… (Ctrl+Enter để gửi)" aria-label="Nội dung tin nhắn"></textarea>
+          <div class="row">
+            <label for="to" class="chip">Gửi tới</label>
+            <select id="to" aria-label="Người nhận"></select>
+            <span id="attachslot"></span>
+            <span style="flex:1"></span>
+            <button class="btn" id="send" type="submit">Gửi</button>
+          </div>
+        </form>
       </div>
-    </form>
+    </div>
   </section>
 
   <section class="view" id="view-board" role="tabpanel" aria-labelledby="tab-board">
@@ -179,7 +203,10 @@ input[type=file]{display:none}
 const prefix = location.pathname.startsWith('/apps/ai-hub') ? '/apps/ai-hub' : '';
 if (prefix) document.getElementById('tinker-return').href = '/#/dashboard';
 const $ = (sel) => document.querySelector(sel);
-const S = {agents: [], tasks: [], messages: [], lastId: 0, thread: null, tab: 'room', unseen: 0, authed: true, limits: {}, legacy: {rows: [], exists: false}, files: null};
+const S = {agents: [], tasks: [], messages: [], lastId: 0, thread: null, tab: 'room', unseen: 0, authed: true, limits: {}, legacy: {rows: [], exists: false}, files: null,
+  conv: 'main', pane: 'list', seen: {base: 0, per: {}}, toChoice: {}, composerSig: '', openGroups: new Set(),
+  openCols: new Set(['todo', 'in_progress', 'in_review', 'blocked']), boardSig: ''};
+const ALL = 'all', MAIN = 'main', LEGACY = 'legacy';
 const FILE_ID = /^[0-9a-f]{32}$/;
 const IMAGE_MIMES = ['image/png', 'image/jpeg', 'image/gif', 'image/webp'];
 const STATUS = {todo: 'Chờ làm', in_progress: 'Đang làm', in_review: 'Chờ review', blocked: 'Bị chặn', done: 'Xong', cancelled: 'Đã huỷ'};
@@ -244,7 +271,8 @@ async function api(path, method = 'GET', body) {
   }
   return data;
 }
-const showErr = (e) => { $('#err').textContent = e ? (e.message || String(e)) : ''; };
+// Lỗi do làm mới nền (tick) tự biến mất khi kết nối lại; lỗi do thao tác của anh (chưa chọn người nhận...) giữ nguyên tới thao tác kế tiếp.
+const showErr = (e, from) => { S.errFrom = e ? (from || 'ui') : ''; $('#err').textContent = e ? (e.message || String(e)) : ''; };
 async function copyText(text) {
   try { await navigator.clipboard.writeText(text); return true; } catch { /* http không phải secure context */ }
   const t = h('textarea', {style: 'position:fixed;opacity:0'}); t.value = text; document.body.append(t); t.select();
@@ -457,10 +485,7 @@ async function previewFile(f) {
 function renderAgents() {
   $('#agentchips').replaceChildren(...S.agents.map((a) => h('span', {class: 'chip', title: a.name + ' · ' + a.mode + ' · thấy lần cuối: ' + ago(a.last_seen), style: '--person:' + (a.online ? 'var(--ok)' : '#9aa5b8')},
     h('span', {class: 'dot'}), a.id)));
-  const prev = $('#to').value;
-  $('#to').replaceChildren(h('option', {value: 'all', text: 'Cả phòng'}),
-    ...S.agents.filter((a) => a.enabled).map((a) => h('option', {value: a.id, text: a.name + ' (' + a.id + ')'})));
-  if ([...$('#to').options].some((o) => o.value === prev)) $('#to').value = prev;
+  renderComposer();
   const f = $('#fassignee'), prevF = f.value;
   f.replaceChildren(h('option', {value: '', text: 'Mọi người làm'}), ...S.agents.map((a) => h('option', {value: a.id, text: a.name})));
   if ([...f.options].some((o) => o.value === prevF)) f.value = prevF;
@@ -473,7 +498,8 @@ function renderMessage(m) {
     h('span', {class: 'who', text: m.from}),
     h('span', {text: '→ ' + m.to.join(', ')}),
     KIND[m.kind] ? h('span', {class: 'badge ' + m.kind, text: KIND[m.kind]}) : null,
-    m.task_id ? h('button', {class: 'tag', type: 'button', text: '#' + m.task_id, title: 'Chỉ xem luồng này', onclick: () => setThread(m.thread_id)}) : null,
+    S.conv === ALL && m.task_id ? h('button', {class: 'tag', type: 'button', text: '#' + m.task_id, title: 'Mở cuộc trò chuyện của việc này', onclick: () => openConv(m.thread_id)}) : null,
+    S.conv === ALL && m.project ? h('span', {class: 'chip', text: m.project}) : null,
     m.reply_to ? h('span', {text: '↩ #' + m.reply_to, title: 'Trả lời tin #' + m.reply_to}) : null,
     h('time', {datetime: m.created_at, text: when(m.created_at)}));
   const files = (m.files || []).map((f) => {
@@ -494,35 +520,164 @@ function renderMessage(m) {
     renderMarkdown(m.body),
     files.length ? h('ul', {class: 'files'}, files) : null);
 }
-function renderFeed() {
+/* --------------------------------------------------- cuộc trò chuyện (theo việc) */
+const SEEN_KEY = 'aihub.seen.v1';
+function loadSeen() {
+  try {
+    const v = JSON.parse(localStorage.getItem(SEEN_KEY) || 'null');
+    if (v && typeof v === 'object') return {base: Number(v.base) || 0, per: v.per && typeof v.per === 'object' ? v.per : {}};
+  } catch { /* không dùng được localStorage */ }
+  return null;
+}
+function saveSeen() { try { localStorage.setItem(SEEN_KEY, JSON.stringify(S.seen)); } catch { /* bỏ qua */ } }
+const taskOf = (id) => S.tasks.find((t) => t.id === id) || null;
+const isOpen = (t) => t.status !== 'done' && t.status !== 'cancelled';
+const needsAnh = (t) => (t.status === 'in_review' && (!t.reviewer || t.reviewer === 'anh')) || t.status === 'blocked';
+const wide = () => !(window.matchMedia && window.matchMedia('(max-width:760px)').matches);
+function convMessages(id) {
+  if (id === LEGACY) return S.legacy.rows;
+  if (id === ALL) return S.messages;
+  return S.messages.filter((m) => m.thread_id === id);
+}
+function unreadOf(id) {
+  if (!S.seenReady || id === ALL || id === LEGACY) return 0;
+  const floor = Math.max(S.seen.base, S.seen.per[id] || 0);
+  return S.messages.filter((m) => m.thread_id === id && m.id > floor && m.from !== 'anh').length;
+}
+function markSeen(id) {
+  if (!S.seenReady || id === ALL || id === LEGACY) return;
+  const last = S.messages.reduce((a, m) => (m.thread_id === id ? Math.max(a, m.id) : a), 0);
+  if (last > (S.seen.per[id] || 0)) { S.seen.per[id] = last; saveSeen(); }
+}
+function convButton(id, title, sub, opts = {}) {
+  return h('button', {class: 'conv', type: 'button', 'aria-current': S.conv === id ? 'true' : null, onclick: () => openConv(id)},
+    h('span', {class: 'ct'}, h('span', {class: 't' + (opts.need ? ' need' : ''), text: title}),
+      opts.badge ? h('span', {class: 'badge2', text: opts.badge > 99 ? '99+' : String(opts.badge), 'aria-label': opts.badge + ' tin chưa đọc'}) : null),
+    h('span', {class: 'cs', text: sub}));
+}
+function renderConvList() {
+  const box = $('#convlist'), keep = box.scrollTop;
+  const open = S.tasks.filter(isOpen), closed = S.tasks.filter((t) => !isOpen(t));
+  const need = open.filter(needsAnh), rest = open.filter((t) => !needsAnh(t));
+  const groups = new Map();
+  for (const t of rest) { const key = t.project || ''; if (!groups.has(key)) groups.set(key, []); groups.get(key).push(t); }
+  const row = (t, mark) => convButton(t.id, '#' + t.id + ' ' + t.title,
+    t.assignee + (t.reviewer ? ' → ' + t.reviewer : '') + ' · ' + STATUS[t.status] + (t.project && mark ? ' · ' + t.project : ''), {badge: unreadOf(t.id), need: mark});
+  const parts = [convButton(MAIN, '💬 Phòng chung', 'Chuyện chung, không thuộc việc nào', {badge: unreadOf(MAIN)}),
+    convButton(ALL, '📋 Tất cả hoạt động', 'Xem mọi tin của mọi việc (chỉ xem)')];
+  if (need.length) parts.push(h('div', {class: 'gh need', text: 'Cần anh (' + need.length + ')'}), ...need.map((t) => row(t, true)));
+  for (const [project, list] of [...groups].sort((x, y) => (x[0] || '\uffff').localeCompare(y[0] || '\uffff'))) {
+    parts.push(h('div', {class: 'gh', text: (project || 'Không có dự án') + ' (' + list.length + ')'}), ...list.map((t) => row(t, false)));
+  }
+  if (closed.length) {
+    parts.push(h('details', {class: 'grp', open: S.openGroups.has('closed') || null,
+      ontoggle: (e) => { if (e.target.open) S.openGroups.add('closed'); else S.openGroups.delete('closed'); }},
+      h('summary', {class: 'gh', text: 'Đã xong / huỷ (' + closed.length + ')'}), ...closed.slice(0, 40).map((t) => row(t, true))));
+  }
+  if (S.legacy.exists) parts.push(h('div', {class: 'gh', text: 'Lưu trữ'}), convButton(LEGACY, '📜 Hộp thư cũ', 'Tin của hộp thư cũ (chỉ xem)'));
+  box.replaceChildren(...parts);
+  box.scrollTop = keep;
+}
+function renderChatHead() {
+  const t = taskOf(S.conv);
+  const back = h('button', {class: 'btn alt', id: 'backlist', type: 'button', text: '‹ Danh sách', onclick: () => { S.pane = 'list'; $('#room').dataset.pane = 'list'; renderConvList(); }});
+  let title = '#' + S.conv, extra = [];
+  if (S.conv === MAIN) title = '💬 Phòng chung';
+  else if (S.conv === ALL) { title = '📋 Tất cả hoạt động'; extra = [h('span', {class: 'meta', text: 'Chỉ xem. Chọn một việc hoặc Phòng chung để nhắn.'})]; }
+  else if (S.conv === LEGACY) { title = '📜 Hộp thư cũ'; extra = [h('span', {class: 'meta', text: 'Chỉ để xem lại.'})]; }
+  else if (t) {
+    title = '#' + t.id + ' · ' + t.title;
+    extra = [h('span', {class: 'st ' + t.status, text: STATUS[t.status]}),
+      t.project ? h('span', {class: 'chip', text: 'dự án ' + t.project}) : null,
+      h('span', {class: 'chip', text: t.assignee + (t.reviewer ? ' → review: ' + t.reviewer : '')}),
+      h('button', {class: 'btn alt', type: 'button', text: 'Mở việc', onclick: () => openTask(t.id)})];
+  }
+  $('#chathead').replaceChildren(back, h('h2', {text: title}), ...extra.filter(Boolean));
+}
+function projectAgents(project) {
+  const ids = new Set(), enabled = new Set(S.agents.filter((a) => a.enabled).map((a) => a.id));
+  for (const t of S.tasks.filter((x) => isOpen(x) && x.project === project)) for (const id of [t.assignee, t.reviewer]) if (id && enabled.has(id)) ids.add(id);
+  return [...ids];
+}
+function recipientOptions() {
+  const agents = S.agents.filter((a) => a.enabled), t = taskOf(S.conv), opts = [], seen = new Set();
+  const add = (value, label) => { if (!seen.has(value)) { seen.add(value); opts.push({value, label}); } };
+  if (t) {
+    const team = [t.assignee, t.reviewer].filter((x) => x && x !== 'anh');
+    add(t.assignee, 'Người làm: ' + t.assignee);
+    if (t.reviewer && t.reviewer !== 'anh') add(t.reviewer, 'Người review: ' + t.reviewer);
+    if (team.length > 1) add('@group', 'Cả nhóm việc (' + team.join(' + ') + ')');
+    for (const a of agents) add(a.id, a.name + ' (' + a.id + ')');
+    return {opts, def: t.status === 'in_review' && t.reviewer && t.reviewer !== 'anh' ? t.reviewer : t.assignee};
+  }
+  add('', '— Chọn người nhận —');
+  for (const a of agents) add(a.id, a.name + ' (' + a.id + ')');
+  for (const p of [...new Set(S.tasks.filter((x) => isOpen(x) && x.project).map((x) => x.project))].sort()) {
+    const n = projectAgents(p).length;
+    if (n) add('@project:' + p, 'Cả dự án ' + p + ' (' + n + ' AI)');
+  }
+  add('@all', 'Cả phòng (AI không tự trả lời)');
+  return {opts, def: ''};
+}
+function renderComposer() {
+  const form = $('#composer'), canSend = S.conv !== ALL && S.conv !== LEGACY;
+  form.hidden = !canSend;
+  if (!canSend) return;
+  const t = taskOf(S.conv), {opts, def} = recipientOptions(), sel = $('#to');
+  const sig = JSON.stringify([S.conv, opts]);
+  if (sig !== S.composerSig) {   // chỉ dựng lại danh sách khi nội dung đổi, tránh đóng ô chọn đang mở
+    S.composerSig = sig;
+    const chosen = S.toChoice[S.conv] !== undefined && opts.some((o) => o.value === S.toChoice[S.conv]) ? S.toChoice[S.conv] : def;
+    sel.replaceChildren(...opts.map((o) => h('option', {value: o.value, text: o.label, selected: o.value === chosen || null})));
+    sel.value = chosen;
+  }
+  $('#ctxline').textContent = t ? 'Đang nhắn trong #' + t.id + (t.project ? ' · dự án ' + t.project : '') + '. AI nhận được cả mã việc và dự án.'
+    : 'Đang nhắn ở phòng chung. Muốn hỏi về một việc: mở việc đó ở danh sách bên trái, hoặc gõ #MÃ ở đầu tin.';
+  $('#msg').placeholder = t ? 'Nhắn về việc này… (Ctrl+Enter để gửi)' : 'Nhắn vào phòng chung… gõ @tên hoặc #MÃ ở đầu tin để chọn người/việc';
+}
+function parseLead(text) {
+  const out = {agents: [], task: null};
+  let rest = text;
+  for (;;) {
+    const m = /^\s*([@#])([A-Za-z0-9][A-Za-z0-9_-]*)/.exec(rest);
+    if (!m) break;
+    if (m[1] === '@') {
+      const a = S.agents.find((x) => x.enabled && x.id === m[2].toLowerCase());
+      if (!a) break;
+      if (!out.agents.includes(a.id)) out.agents.push(a.id);
+    } else {
+      const t = S.tasks.find((x) => x.id.toLowerCase() === m[2].toLowerCase());
+      if (!t) break;
+      out.task = t;
+    }
+    rest = rest.slice(m[0].length);
+  }
+  return out;
+}
+function renderFeed(forceBottom) {
   const feed = $('#feed');
-  const legacyMode = S.thread === 'legacy';
-  const atBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
-  const rows = legacyMode ? S.legacy.rows : S.thread ? S.messages.filter((m) => m.thread_id === S.thread) : S.messages;
-  const emptyText = legacyMode ? 'Chưa có tin nào được nhập từ hộp thư cũ.' : S.thread ? 'Luồng này chưa có tin.' : 'Nhắn một câu để các AI bắt đầu làm việc.';
+  const atBottom = forceBottom || feed.scrollHeight - feed.scrollTop - feed.clientHeight < 80;
+  const rows = convMessages(S.conv);
+  const emptyText = S.conv === LEGACY ? 'Chưa có tin nào được nhập từ hộp thư cũ.' : S.conv === MAIN ? 'Phòng chung chưa có tin. Nhắn một câu để bắt đầu.'
+    : S.conv === ALL ? 'Chưa có hoạt động nào.' : 'Việc này chưa có tin. Nhắn để trao đổi với AI về việc này.';
   if (!rows.length) feed.replaceChildren(h('div', {class: 'empty'}, h('strong', {text: 'Chưa có tin nào'}), h('div', {text: emptyText})));
   else feed.replaceChildren(...rows.map(renderMessage));
   if (atBottom) feed.scrollTop = feed.scrollHeight;
-  $('#composer').hidden = legacyMode;
-  $('#roomtools').hidden = !S.legacy.exists;
-  const bar = $('#filter');
-  bar.hidden = !S.thread;
-  bar.replaceChildren(...(legacyMode ? [h('span', {text: 'Đang xem '}), h('strong', {text: '📜 lịch sử hộp thư cũ'}), h('span', {text: ' (chỉ để xem)'}),
-    h('button', {class: 'btn alt', type: 'button', text: 'Quay lại phòng', onclick: () => setThread(null)})] :
-    S.thread ? [h('span', {text: 'Đang xem luồng '}), h('strong', {text: '#' + S.thread}), h('button', {class: 'btn alt', type: 'button', text: 'Xem tất cả', onclick: () => setThread(null)})] : []));
+  if (S.tab === 'room' && !document.hidden && (S.pane === 'chat' || wide())) markSeen(S.conv);
 }
-function setThread(id) {
-  if (id === 'legacy') { openLegacy(); return; }
-  S.thread = id; showTab('room'); renderFeed(); const f = $('#feed'); f.scrollTop = f.scrollHeight;
+async function openConv(id) {
+  if (id === LEGACY) {
+    try { S.legacy.rows = (await api('/messages?thread_id=legacy&tail=200')).messages; } catch (e) { showErr(e); return; }
+  }
+  S.conv = id || MAIN; S.pane = 'chat';
+  $('#room').dataset.pane = 'chat';
+  showTab('room');
+  renderChatHead(); renderComposer(); renderFeed(true); renderConvList();
 }
+const setThread = (id) => openConv(id || MAIN);
 async function probeLegacy() {
   try { S.legacy.exists = (await api('/messages?thread_id=legacy&tail=1')).messages.length > 0; } catch { /* không có lịch sử thì thôi */ }
-  $('#roomtools').hidden = !S.legacy.exists;
-}
-async function openLegacy() {
-  try { S.legacy.rows = (await api('/messages?thread_id=legacy&tail=200')).messages; } catch (e) { showErr(e); return; }
-  S.thread = 'legacy'; showTab('room'); renderFeed();
-  const f = $('#feed'); f.scrollTop = f.scrollHeight;
+  renderConvList();
 }
 async function loadMessages(initial) {
   const d = await api('/messages' + (initial ? '?tail=150' : '?after=' + S.lastId + '&limit=200'));
@@ -531,30 +686,53 @@ async function loadMessages(initial) {
   S.lastId = d.last_id;
   if (document.hidden && !initial) { S.unseen += d.messages.filter((m) => m.from !== 'anh').length; updateTitle(); }
   renderFeed();
+  renderConvList();
 }
 const updateTitle = () => { document.title = (S.unseen ? '(' + S.unseen + ') ' : '') + 'AI Hub'; };
 async function sendMessage(ev) {
   ev.preventDefault();
   if (S.attach.busy()) { showErr(new Error('Đang tải tệp lên, đợi một chút nhé.')); return; }
   const files = S.attach.ids();
-  const body = $('#msg').value.trim() || (files.length ? '(Tệp đính kèm)' : '');
+  const text = $('#msg').value.trim();
+  const body = text || (files.length ? '(Tệp đính kèm)' : '');
   if (!body) return;
-  const payload = {body, to: $('#to').value || 'all', request_id: rid()};
+  const lead = parseLead(text);
+  const task = taskOf(S.conv) || lead.task;   // trong một việc: ở lại việc đó; ở phòng chung: #MÃ đầu tin chọn việc
+  let to = null, project = null;
+  const choice = $('#to').value;
+  if (lead.agents.length) to = lead.agents;
+  else if (choice === '@all') to = ['all'];
+  else if (choice === '@group' && task) to = [task.assignee, task.reviewer].filter((x) => x && x !== 'anh');
+  else if (choice.startsWith('@project:')) { project = choice.slice(9); to = projectAgents(project); }
+  else if (choice) to = [choice];
+  if (!to || !to.length) { showErr(new Error('Chọn người nhận (ô “Gửi tới”) hoặc gõ @tên ở đầu tin.')); return; }
+  const payload = {body, to, request_id: rid()};
+  if (task) { payload.task_id = task.id; payload.thread_id = task.id; if (task.project) payload.project = task.project; }
+  else if (project) payload.project = project;
   if (files.length) payload.files = files;
-  if (S.thread) payload.thread_id = S.thread;
   $('#send').disabled = true;
-  try { await api('/messages', 'POST', payload); $('#msg').value = ''; S.attach.reset(); showErr(null); await loadMessages(false); }
-  catch (e) { showErr(e); }
+  try {
+    await api('/messages', 'POST', payload);
+    $('#msg').value = ''; S.attach.reset(); showErr(null);
+    await loadMessages(false);
+    renderFeed(true);
+  } catch (e) { showErr(e); }
   finally { $('#send').disabled = false; }
 }
 
 /* -------------------------------------------------------------------- việc */
-function renderBoard() {
+function renderBoard(force) {
   const who = $('#fassignee').value;
   const tasks = S.tasks.filter((t) => !who || t.assignee === who);
+  // Không dựng lại nếu dữ liệu không đổi (làm mất nhóm đang mở và vị trí cuộn mỗi lần làm mới nền).
+  const sig = JSON.stringify([who, S.tasks.map((t) => [t.id, t.status, t.updated_at, t.title, t.assignee, t.reviewer, t.project])]);
+  if (!force && sig === S.boardSig) return;
+  S.boardSig = sig;
+  const board = $('#board'), scroll = board.scrollTop;
   const cols = Object.keys(STATUS).map((st) => {
     const list = tasks.filter((t) => t.status === st);
-    return h('details', {class: 'col', open: ['todo', 'in_progress', 'in_review', 'blocked'].includes(st) || null},
+    return h('details', {class: 'col', open: S.openCols.has(st) || null,
+      ontoggle: (e) => { if (e.target.open) S.openCols.add(st); else S.openCols.delete(st); }},
       h('summary', {}, h('span', {class: 'st ' + st, text: STATUS[st]}), h('span', {class: 'chip', text: list.length})),
       list.length ? h('div', {class: 'grid'}, list.map((t) =>
         h('button', {class: 'card task', type: 'button', onclick: () => openTask(t.id)},
@@ -562,9 +740,10 @@ function renderBoard() {
           h('span', {class: 's', text: '#' + t.id + (t.project ? ' · ' + t.project : '')}),
           h('span', {class: 's', text: t.assignee + (t.reviewer ? ' → review: ' + t.reviewer : '') + ' · ' + ago(t.updated_at)})))) : null);
   });
-  $('#board').replaceChildren(...(S.tasks.length ? cols : [h('div', {class: 'empty'}, h('strong', {text: 'Chưa có việc nào'}), h('div', {text: 'Bấm “+ Việc mới” để giao việc cho một AI.'}))]));
+  board.replaceChildren(...(S.tasks.length ? cols : [h('div', {class: 'empty'}, h('strong', {text: 'Chưa có việc nào'}), h('div', {text: 'Bấm “+ Việc mới” để giao việc cho một AI.'}))]));
+  board.scrollTop = scroll;
 }
-async function loadTasks() { S.tasks = (await api('/tasks?limit=200')).tasks; renderBoard(); }
+async function loadTasks() { S.tasks = (await api('/tasks?limit=200')).tasks; renderBoard(); renderConvList(); renderChatHead(); renderComposer(); }
 async function loadAgents() { S.agents = (await api('/agents')).agents; renderAgents(); renderAgentList(); }
 
 function dialog(...content) {
@@ -654,6 +833,7 @@ function newTaskDialog() {
 
 /* ---------------------------------------------------------------------- AI */
 function renderAgentList() {
+  const keepScroll = $('#agentlist').scrollTop;
   $('#agentlist').replaceChildren(...(S.agents.length ? S.agents.map((a) =>
     h('div', {class: 'card agent', style: '--person:' + (a.online ? 'var(--ok)' : '#9aa5b8')},
       h('div', {class: 'top'}, h('span', {class: 'dot' + (a.online ? ' on' : '')}), h('strong', {text: a.name}), h('span', {class: 'chip', text: a.id}),
@@ -664,6 +844,7 @@ function renderAgentList() {
         h('button', {class: 'btn alt', type: 'button', text: 'Đổi token', onclick: () => rotate(a)}),
         h('button', {class: 'btn alt', type: 'button', text: a.enabled ? 'Tắt' : 'Bật', onclick: () => toggle(a)})))) :
     [h('div', {class: 'empty'}, h('strong', {text: 'Chưa có AI nào'}), h('div', {text: 'Bấm “+ Thêm AI” để tạo token cho AI đầu tiên.'}))]));
+  $('#agentlist').scrollTop = keepScroll;
 }
 async function toggle(a) {
   try { await api('/agents/' + a.id + '/' + (a.enabled ? 'disable' : 'enable'), 'POST', {}); await loadAgents(); showErr(null); } catch (e) { showErr(e); }
@@ -778,12 +959,12 @@ function showTab(name) {
   if (name === 'files') loadFiles();
 }
 let beat = 0;
-async function refreshMeta() { try { await Promise.all([loadAgents(), loadTasks()]); } catch (e) { showErr(e); } }
+async function refreshMeta() { try { await Promise.all([loadAgents(), loadTasks()]); } catch (e) { showErr(e, 'tick'); } }
 async function tick() {
   if (!S.authed) return;
   beat += 1;
   if (document.hidden && beat % 5) return;   // tab ẩn: hỏi thưa hơn (~20 giây)
-  try { await loadMessages(false); showErr(null); } catch (e) { showErr(e); }
+  try { await loadMessages(false); if (S.errFrom === 'tick') showErr(null); } catch (e) { showErr(e, 'tick'); }
   if (beat % 3 === 0) refreshMeta();
 }
 async function init() {
@@ -795,18 +976,21 @@ async function init() {
   $('#newtask').addEventListener('click', newTaskDialog);
   $('#newagent').addEventListener('click', newAgentDialog);
   $('#importlegacy').addEventListener('click', legacyImportDialog);
-  $('#legacybtn').addEventListener('click', openLegacy);
   $('#purgepreview').addEventListener('click', () => purgeFiles(true));
   $('#purgego').addEventListener('click', () => { if (confirm('Xoá thật các tệp cũ? Việc này không hoàn tác được.')) purgeFiles(false); });
   $('#purgedays').addEventListener('input', () => { $('#purgego').disabled = true; });
-  $('#fassignee').addEventListener('change', renderBoard);
+  $('#fassignee').addEventListener('change', () => renderBoard(true));
+  $('#to').addEventListener('change', () => { S.toChoice[S.conv] = $('#to').value; });
   document.addEventListener('visibilitychange', () => { if (!document.hidden) { S.unseen = 0; updateTitle(); tick(); } });
   try {
     S.limits = (await api('/me')).limits || {};
     await Promise.all([loadAgents(), loadTasks(), loadMessages(true), probeLegacy()]);
-    renderFeed(); renderBoard();
-    $('#feed').scrollTop = $('#feed').scrollHeight;
-  } catch (e) { showErr(e); renderFeed(); }
+    const stored = loadSeen();
+    S.seen = stored || {base: S.lastId, per: {}};   // lần đầu: coi tin hiện có là đã đọc, chỉ đếm tin đến sau
+    S.seenReady = true;
+    if (!stored) saveSeen();
+    renderChatHead(); renderComposer(); renderFeed(true); renderConvList(); renderBoard(true);
+  } catch (e) { showErr(e); renderChatHead(); renderComposer(); renderFeed(true); }
   setInterval(tick, 4000);
 }
 init();

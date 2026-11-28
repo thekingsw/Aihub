@@ -166,7 +166,8 @@ def _get(handler, path, query):
     if path == "/api/v1/tasks":
         first = lambda name: (query.get(name) or [None])[0]  # noqa: E731
         return {"ok": True, "tasks": board.list(first("status"), first("assignee"), first("project"),
-                                                _int(query, "limit", 100))}
+                                                _int(query, "limit", 100), first("involves"),
+                                                (first("open") or "").lower() in ("1", "true", "yes"))}
     match = re.fullmatch(r"/api/v1/tasks/([A-Za-z0-9][A-Za-z0-9_-]{0,39})", path)
     if match:
         return {"ok": True, "task": board.get(match.group(1))}

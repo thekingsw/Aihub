@@ -305,12 +305,13 @@ class AgentRunner:
     def process(self, m):
         outcome_path = self.runs_dir / ("%d.outcome.json" % m["id"])
         task = None
-        if m.get("task_id"):
-            reply = self.client.task(m["task_id"])
+        task_ref = m.get("task_id") or (m.get("thread_id") if m.get("thread_id") not in (None, "main", "legacy") else None)
+        if task_ref:
+            reply = self.client.task(task_ref)
             if reply.get("ok"):
                 task = reply["task"]
             elif reply.get("error") not in ("NOT_FOUND", "BAD_REQUEST"):
-                raise HubUnavailable("Không đọc được việc %s: %s" % (m["task_id"], reply.get("error")))
+                raise HubUnavailable("Không đọc được việc %s: %s" % (task_ref, reply.get("error")))
         if outcome_path.exists():  # lần trước đã chạy xong nhưng chưa báo được: chỉ báo lại, không chạy lại
             outcome = json.loads(outcome_path.read_text(encoding="utf-8"))
             if not outcome.get("delivered"):
@@ -604,16 +605,46 @@ class AgentRunner:
                     self._intro(), task["assignee"], workdir, task["id"], task["title"], task["description"],
                     self._history(task), m["from"], m["body"], files, self._RULES))
 
+    def _open_tasks(self):
+        """Việc đang mở mà agent là người làm hoặc người review (để biết mình đang giữ những việc nào)."""
+        try:
+            reply = self.client.tasks(involves=self.cfg.id, open=True, limit=50)
+        except OSError:
+            return []
+        return reply.get("tasks", []) if reply.get("ok") else []
+
+    _STATUS_VI = {"todo": "chờ làm", "in_progress": "đang làm", "in_review": "chờ review", "blocked": "bị chặn"}
+
     def _chat_prompt(self, m, task, workdir):
+        project = (task or {}).get("project") or m.get("project")
+        if task:
+            where = "Tin này nằm trong luồng của việc #%s (%s)%s." % (
+                task["id"], task["title"], ", dự án %s" % task["project"] if task.get("project") else "")
+        elif project:
+            where = "Tin này nói về dự án %s, không thuộc một việc cụ thể." % project
+        else:
+            where = "Tin này ở phòng chung, không gắn với việc hay dự án nào."
+        open_tasks = self._open_tasks()
+        shown = [t for t in open_tasks if not project or t.get("project") == project] if project and not task else open_tasks
+        lines = ["- #%s%s %s — %s (bạn %s)" % (
+            t["id"], " [%s]" % t["project"] if t.get("project") else "", t["title"],
+            self._STATUS_VI.get(t["status"], t["status"]), "làm" if t["assignee"] == self.cfg.id else "review")
+            for t in shown[:15]]
+        digest = ""
+        if lines:
+            digest = "\n## Việc đang mở của bạn\n%s%s\n" % ("\n".join(lines),
+                                                          "\n(và %d việc khác)" % (len(shown) - 15) if len(shown) > 15 else "")
         context = ""
         if task:
             context = "\n## Việc liên quan #%s: %s (trạng thái %s)\n%s\n" % (task["id"], task["title"], task["status"],
                                                                              self._history(task))
-        return ("%s\nCó tin nhắn gửi riêng cho bạn từ %s:\n\n%s\n%s\n%s"
+        return ("%s\nCó tin nhắn gửi riêng cho bạn từ %s. %s\n\n%s\n%s%s\n%s"
                 "- Trả lời trực tiếp, tối đa ~10 dòng. Chỉ làm thêm việc nếu tin yêu cầu rõ.\n"
+                "- Tin có nêu mã việc (#MÃ) hoặc tên dự án thì chỉ nói về đúng việc/dự án đó.\n"
+                "- Nếu tin hỏi chung mà có thể ứng với nhiều việc trong danh sách trên, KHÔNG đoán: hỏi lại đúng một "
+                "câu ngắn, liệt kê các lựa chọn bằng mã việc và tiêu đề.\n"
                 "- Nếu không có gì mới cần nói (chỉ xác nhận, cảm ơn), in đúng một dòng: SILENT\n"
-                % (self._intro(), m["from"], m["body"], context, self._RULES))
-
+                % (self._intro(), m["from"], where, m["body"], context, digest, self._RULES))
 
 # --------------------------------------------------------------------------- main
 def build_runners(config):

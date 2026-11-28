@@ -159,6 +159,61 @@ class BoardTests(unittest.TestCase):
             self.board.list(status="weird")
 
 
+class TaskContextTests(unittest.TestCase):
+    """Tin nằm trong luồng của một việc phải tự mang task_id/project để AI biết đang nói về việc nào."""
+
+    def setUp(self):
+        self.dir = Path(self.enterContext(tempfile.TemporaryDirectory()))
+        self.hub = HubDB(str(self.dir / "hub.sqlite3"))
+        self.addCleanup(self.hub.db.close)
+        for agent_id in ("codex", "muse"):
+            self.hub.register_agent(agent_id, agent_id.title(), "push")
+        self.board = hub_tasks.board_for(self.hub)
+        self.board.create("anh", "Làm game", "codex", reviewer="muse", task_id="GAME-1", project="retro")
+        self.board.create("anh", "Làm KPI", "codex", task_id="KPI-1", project="kpi")
+
+    def test_thread_id_of_a_task_fills_task_id_and_project(self):
+        msg = self.hub.post("anh", "nút cờ lỗi", to="codex", thread_id="GAME-1")
+        self.assertEqual((msg["task_id"], msg["project"], msg["thread_id"]), ("GAME-1", "retro", "GAME-1"))
+
+    def test_task_id_alone_fills_project(self):
+        msg = self.hub.post("anh", "hỏi", to="codex", task_id="KPI-1")
+        self.assertEqual((msg["thread_id"], msg["project"]), ("KPI-1", "kpi"))
+
+    def test_replies_inherit_task_and_project(self):
+        first = self.hub.post("anh", "hỏi nhỏ", to="codex", task_id="GAME-1")
+        reply = self.hub.post("codex", "đã sửa", reply_to=first["id"])
+        self.assertEqual((reply["task_id"], reply["project"], reply["thread_id"]), ("GAME-1", "retro", "GAME-1"))
+
+    def test_unrelated_threads_are_untouched(self):
+        for thread in ("main", "ui-abc", "legacy-ish"):
+            msg = self.hub.post("anh", "chuyện chung " + thread, to="codex", thread_id=thread)
+            self.assertNotIn("task_id", msg)
+            self.assertNotIn("project", msg)
+        msg = self.hub.post("anh", "nói về dự án", to="codex", project="retro")
+        self.assertEqual((msg["thread_id"], msg.get("task_id"), msg["project"]), ("main", None, "retro"))
+
+    def test_explicit_project_is_kept(self):
+        msg = self.hub.post("anh", "x", to="codex", thread_id="GAME-1", project="khác")
+        self.assertEqual(msg["project"], "khác")
+
+    def test_works_before_the_task_table_exists(self):
+        fresh = HubDB(str(self.dir / "fresh.sqlite3"))
+        self.addCleanup(fresh.db.close)
+        fresh.register_agent("codex", "Codex", "push")
+        msg = fresh.post("anh", "chưa có bảng việc", to="codex", thread_id="GAME-1")
+        self.assertNotIn("task_id", msg)
+
+    def test_list_filters_involves_and_open(self):
+        self.board.create("anh", "Việc của muse", "muse", reviewer="codex", task_id="M-1", project="kpi")
+        self.board.transition("anh", "KPI-1", "cancelled", note="bỏ")
+        ids = lambda **kw: sorted(t["id"] for t in self.board.list(**kw))  # noqa: E731
+        self.assertEqual(ids(involves="codex"), ["GAME-1", "KPI-1", "M-1"])
+        self.assertEqual(ids(involves="codex", open_only=True), ["GAME-1", "M-1"])
+        self.assertEqual(ids(involves="muse", open_only=True), ["GAME-1", "M-1"])
+        self.assertEqual(ids(involves="nobody"), [])
+
+
 class TaskApiTests(unittest.TestCase):
     admin = "test-internal"
 
@@ -204,6 +259,17 @@ class TaskApiTests(unittest.TestCase):
         self.assertEqual([t["id"] for t in muse._request("GET", "/api/v1/tasks?status=done")["tasks"]], ["GAME-1"])
         thread = self.root._request("GET", "/api/v1/messages?thread_id=GAME-1&limit=50")["messages"]
         self.assertEqual([m["kind"] for m in thread], ["task", "handoff", "review"])
+
+    def test_involves_and_open_filters_over_http(self):
+        codex = self.clients["codex"]
+        for task_id, assignee, reviewer in (("A", "codex", "muse"), ("B", "muse", "codex"), ("C", "muse", None)):
+            self.root._request("POST", "/api/v1/tasks", {"id": task_id, "title": task_id, "assignee": assignee,
+                                                        "reviewer": reviewer, "project": "p" + task_id})
+        self.root._request("POST", "/api/v1/tasks/B/status", {"status": "cancelled", "note": "bỏ"})
+        got = lambda q: sorted(t["id"] for t in codex._request("GET", "/api/v1/tasks" + q)["tasks"])  # noqa: E731
+        self.assertEqual(got("?involves=codex"), ["A", "B"])
+        self.assertEqual(got("?involves=codex&open=1"), ["A"])
+        self.assertEqual(sorted(t["id"] for t in codex.tasks(involves="muse", open=True)["tasks"]), ["A", "C"])
 
     def test_http_errors(self):
         codex = self.clients["codex"]

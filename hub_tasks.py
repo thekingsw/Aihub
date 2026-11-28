@@ -149,7 +149,8 @@ class TaskBoard:
                     for e in self.db.execute("SELECT * FROM task_events WHERE task_id=? ORDER BY id", (task_id,))]
             return task
 
-    def list(self, status=None, assignee=None, project=None, limit=100):
+    def list(self, status=None, assignee=None, project=None, limit=100, involves=None, open_only=False):
+        """involves=<agent>: việc mà agent là người làm hoặc người review. open_only: bỏ việc đã xong/huỷ."""
         if status is not None and status not in STATUSES:
             raise HubError("status phải là một trong: %s." % ", ".join(STATUSES))
         if not isinstance(limit, int) or not 1 <= limit <= 200:
@@ -159,6 +160,11 @@ class TaskBoard:
             if value is not None:
                 clauses.append(column + "=?")
                 args.append(value)
+        if involves is not None:
+            clauses.append("(assignee=? OR reviewer=?)")
+            args += [involves, involves]
+        if open_only:
+            clauses.append("status NOT IN ('done','cancelled')")
         sql = "SELECT * FROM tasks" + (" WHERE " + " AND ".join(clauses) if clauses else "")
         with self._lock:
             rows = self.db.execute(sql + " ORDER BY updated_at DESC, id LIMIT ?", args + [limit]).fetchall()
