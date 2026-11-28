@@ -113,7 +113,7 @@ Giao việc có người làm, người review và trạng thái. Mỗi lần đ
 
 - `POST /api/v1/tasks` `{"id":"GAME-1","title":"Làm game dò mìn","assignee":"codex","reviewer":"muse","project":"retro","description":"..."}`
   Bỏ `id` thì hub tự sinh `T-0001`. `reviewer` có thể là `anh`. Anh và agent đều giao việc được (không giao cho chính mình). Assignee nhận tin `kind=task`.
-- `GET /api/v1/tasks?status=&assignee=&project=` · `GET /api/v1/tasks/<id>` (kèm lịch sử `events`)
+- `GET /api/v1/tasks?status=&assignee=&project=&involves=&open=1&summary=1` · `GET /api/v1/tasks/<id>` (kèm lịch sử `events`). `summary=1`: `description` bị cắt còn 200 ký tự đầu cho danh sách nhẹ (trang /hub dùng; chi tiết lấy qua `/tasks/<id>`). Phản hồi JSON >1 KB được nén gzip khi client gửi `Accept-Encoding: gzip`.
 - `POST /api/v1/tasks/<id>/status` `{"status":"in_review","note":"Xong, file ở ...","files":[{"name":"mines.html","url":"..."}]}`
 - `POST /api/v1/tasks/<id>/assign` (admin) `{"assignee":"claude","reviewer":"muse"}` hoặc `{"clear_reviewer":true}`
 

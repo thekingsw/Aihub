@@ -743,7 +743,7 @@ function renderBoard(force) {
   board.replaceChildren(...(S.tasks.length ? cols : [h('div', {class: 'empty'}, h('strong', {text: 'Chưa có việc nào'}), h('div', {text: 'Bấm “+ Việc mới” để giao việc cho một AI.'}))]));
   board.scrollTop = scroll;
 }
-async function loadTasks() { S.tasks = (await api('/tasks?limit=200')).tasks; renderBoard(); renderConvList(); renderChatHead(); renderComposer(); }
+async function loadTasks() { S.tasks = (await api('/tasks?limit=200&summary=1')).tasks; renderBoard(); renderConvList(); renderChatHead(); renderComposer(); }
 async function loadAgents() { S.agents = (await api('/agents')).agents; renderAgents(); renderAgentList(); }
 
 function dialog(...content) {

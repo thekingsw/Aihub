@@ -23,7 +23,7 @@ TRANSITIONS = {
     ("in_progress", "done"): {"assignee"},          # chỉ khi việc không có reviewer
     ("in_review", "done"): {"reviewer"},
     ("in_review", "in_progress"): {"reviewer"},     # trả về làm lại (rework)
-    ("blocked", "in_progress"): {"assignee"},
+    ("blocked", "in_progress"): {"assignee", "reviewer", "creator"},  # mở chặn: người làm, người nghiệm thu hoặc người giao việc
     ("done", "in_progress"): set(),                 # mở lại: chỉ admin
     ("cancelled", "in_progress"): set(),
 }
@@ -149,8 +149,10 @@ class TaskBoard:
                     for e in self.db.execute("SELECT * FROM task_events WHERE task_id=? ORDER BY id", (task_id,))]
             return task
 
-    def list(self, status=None, assignee=None, project=None, limit=100, involves=None, open_only=False):
-        """involves=<agent>: việc mà agent là người làm hoặc người review. open_only: bỏ việc đã xong/huỷ."""
+    def list(self, status=None, assignee=None, project=None, limit=100, involves=None, open_only=False,
+             summary=False):
+        """involves=<agent>: việc mà agent là người làm hoặc người review. open_only: bỏ việc đã xong/huỷ.
+        summary=True: cắt description còn 200 ký tự đầu (danh sách nhẹ; chi tiết lấy qua get)."""
         if status is not None and status not in STATUSES:
             raise HubError("status phải là một trong: %s." % ", ".join(STATUSES))
         if not isinstance(limit, int) or not 1 <= limit <= 200:
@@ -168,7 +170,12 @@ class TaskBoard:
         sql = "SELECT * FROM tasks" + (" WHERE " + " AND ".join(clauses) if clauses else "")
         with self._lock:
             rows = self.db.execute(sql + " ORDER BY updated_at DESC, id LIMIT ?", args + [limit]).fetchall()
-        return [self._task(r) for r in rows]
+        tasks = [self._task(r) for r in rows]
+        if summary:
+            for t in tasks:
+                if t.get("description"):
+                    t["description"] = t["description"][:200]
+        return tasks
 
     # ------------------------------------------------------------- chuyển trạng thái
     def _roles(self, actor, task):

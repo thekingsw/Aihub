@@ -138,6 +138,16 @@ class BoardTests(unittest.TestCase):
         report = [m for m in self.hub.read_for("anh") if m["body"].startswith("BỊ CHẶN")]
         self.assertEqual(len(report), 1)
         self.board.transition("codex", "GAME-1", "in_progress")
+        # Mở chặn: reviewer và creator cũng mở được (anh chốt 28/11 — việc kẹt Tinker tự xử lý)
+        self.board.transition("codex", "GAME-1", "blocked", note="Kẹt lần 2")
+        self.board.transition("muse", "GAME-1", "in_progress")  # reviewer mở chặn
+        self.board.transition("codex", "GAME-1", "blocked", note="Kẹt lần 3")
+        with self.assertRaises(Forbidden):
+            self.board.transition("claude", "GAME-1", "in_progress")  # người ngoài không mở được
+        self.board.transition("anh", "GAME-1", "in_progress")
+        self.board.create("muse", "Việc muse giao", "codex", task_id="M-9")
+        self.board.transition("codex", "M-9", "blocked", note="Kẹt")
+        self.board.transition("muse", "M-9", "in_progress")  # creator (không phải admin) mở chặn
         with self.assertRaises(Forbidden):
             self.board.transition("codex", "GAME-1", "cancelled", note="thôi")  # không phải người tạo
         self.board.transition("anh", "GAME-1", "cancelled", note="Đổi kế hoạch")
@@ -212,6 +222,16 @@ class TaskContextTests(unittest.TestCase):
         self.assertEqual(ids(involves="codex", open_only=True), ["GAME-1", "M-1"])
         self.assertEqual(ids(involves="muse", open_only=True), ["GAME-1", "M-1"])
         self.assertEqual(ids(involves="nobody"), [])
+
+    def test_list_summary_truncates_description(self):
+        long_desc = "x" * 500
+        self.board.create("anh", "Việc dài", "codex", task_id="LONG-1", description=long_desc)
+        full = {t["id"]: t for t in self.board.list()}["LONG-1"]
+        self.assertEqual(full["description"], long_desc)
+        summ = {t["id"]: t for t in self.board.list(summary=True)}["LONG-1"]
+        self.assertEqual(summ["description"], "x" * 200)
+        # get() vẫn trả toàn văn
+        self.assertEqual(self.board.get("LONG-1")["description"], long_desc)
 
 
 class TaskApiTests(unittest.TestCase):

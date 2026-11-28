@@ -5,6 +5,7 @@ AI Hub - web app tren PC anh.
 Em (Tinker) lam cua chinh: nhan viec cua anh, goi AI khac (ChatGPT truoc),
 quan ly lich su + API key. Chay bang Python stdlib, khong can pip.
 """
+import gzip
 import json
 import os
 import re
@@ -462,6 +463,10 @@ class Handler(BaseHTTPRequestHandler):
         self.send_response(code)
         self.send_header("Content-Type", "application/json; charset=utf-8")
         self._cors()
+        # Nén gzip khi client chấp nhận (trình duyệt): danh sách việc/tin có thể nặng hàng trăm KB.
+        if len(body) > 1024 and "gzip" in (self.headers.get("Accept-Encoding") or ""):
+            body = gzip.compress(body)
+            self.send_header("Content-Encoding", "gzip")
         self.send_header("Content-Length", str(len(body)))
         self.end_headers()
         self.wfile.write(body)
